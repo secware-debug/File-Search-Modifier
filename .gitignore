@@ -1,0 +1,10 @@
+# Ignore the Release directories
+Release/
+MessageLog/Release/
+demo/Release/
+
+# Ignore specific directories
+hook/x64/
+demo/demo/
+demo/x64/
+demo/.vs/
