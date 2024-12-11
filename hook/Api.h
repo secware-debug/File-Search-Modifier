@@ -12,6 +12,11 @@
 #include <atlcomcli.h>  // for COM smart pointers
 #include <atlbase.h>    // for COM smart pointers
 #include "resource.h"
+#include <shlobj.h>
+#include <vector>
+#include <algorithm>
+#include <nlohmann/json.hpp>
+#include <tchar.h>
 
 #define NT_SUCCESS(Status)			((NTSTATUS)(Status) >= 0)
 #ifndef STATUS_NO_MORE_FILES
@@ -21,7 +26,24 @@
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
 #define SEARCH_PIPE_NAME "\\\\.\\pipe\\SEARCHDEBUGLOG"
+// Global variables
 HANDLE g_hPipe = NULL;
+
+std::wstring g_strSearchDirectory = L"";
+void SetGlobalDirectoryString(const std::wstring& newValue) {
+	g_strSearchDirectory = newValue;
+}
+std::wstring GetGlobalDirectoryString() {
+	return g_strSearchDirectory;
+}
+
+std::wstring g_strSearchWord = L"";
+void SetGlobalSearchWord(const std::wstring& newValue) {
+	g_strSearchWord = newValue;
+}
+std::wstring GetGlobalSearchWord() {
+	return g_strSearchWord;
+}
 
 std::string WStringToString(const std::wstring& wstr)
 {
@@ -1051,6 +1073,18 @@ HRESULT NewSHOpenFolderAndSelectItems(
 	return TrueSHOpenFolderAndSelectItems(pidlFolder, cidl, apidl, dwFlags);
 }
 
+BOOL CheckSearchSTate(const std::wstring& input) {
+	const std::wstring prefix = L"search-ms:";
+
+	// Check if the input starts with "search-ms:"
+	if (input.find(prefix) == 0) {
+		std::wcout << L"The input starts with \"search-ms:\"." << std::endl;
+	}
+	else {
+		std::wcout << L"The input does not start with \"search-ms:\"." << std::endl;
+	}
+}
+
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
 SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
 #include <shobjidl.h>  // for IKnownFolder
@@ -1068,18 +1102,21 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		CComHeapPtr<wchar_t> pPath;
 		::SHGetNameFromIDList(*ppidl, SIGDN_PARENTRELATIVEFORADDRESSBAR, &pSearch);
 		std::wstring input = static_cast<LPWSTR>(pSearch);
+		//notify( L"Input value is" + input);
 		std::wstring searchword = extractCrumbValue(input);
+		SetGlobalSearchWord(searchword);
 		if (searchword.length() > 0)
-		{
+		{			
 			std::wstring searchpath = extractLocation(input);
-			notify(searchword + L"&" + searchpath);
+			SetGlobalDirectoryString(searchpath);
+			//notify(searchword + L"&" + searchpath);
 			const std::wstring prefix = L"C:\\";
 			if (searchpath.compare(0, prefix.length(), prefix) == 0)
 			{
 				//ppidl = NULL;
 				//return E_UNEXPECTED;
 				PIDLIST_ABSOLUTE newPidl = nullptr;
-				HRESULT hr = SHParseDisplayName(L"E:\\", nullptr, &newPidl, 0, nullptr);
+				HRESULT hr = SHParseDisplayName(L"C:\\", nullptr, &newPidl, 0, nullptr);
 				*ppidl = newPidl;
 			}
 		}
@@ -1343,6 +1380,138 @@ void setNextEntryOffset
 	}
 }
 
+//////////////////////////////////////////////////////////////////////////
+#define ALIGN_UP_BY(length, alignment) \
+    (((length) + ((alignment) - 1)) & ~((alignment) - 1))
+
+#define ALIGN_UP_POINTER_BY(pointer, alignment) \
+    ((PVOID)ALIGN_UP_BY((ULONG_PTR)(pointer), (alignment)))
+
+typedef struct _RESULT_ITEM {
+	int Type;
+	std::wstring Name;
+}RESULT_ITEM, *PRESULT_ITEM;
+
+BOOL CheckPermittedDrive(const std::wstring& directory) {
+
+	std::vector<std::string> permittedDrives;
+	
+	std::ifstream configFile("C:\\SearchConfig\\config.json");
+	if (!configFile.is_open()) {
+		OutputDebugStringA("Error opening config.json");
+		return FALSE;
+	}
+	nlohmann::json configJson;
+	configFile >> configJson;
+	configFile.close();
+
+	// Extract permitted drives
+	permittedDrives = configJson["PermittedDrives"].get<std::vector<std::string>>();
+	// Extract drive letter from the directory path
+	std::string directoryStr(directory.begin(), directory.end());
+	//std::string driveLetter = directoryStr.substr(0, directoryStr.find(':'));
+
+	return std::find(permittedDrives.begin(), permittedDrives.end(), directoryStr) != permittedDrives.end();
+}
+
+std::vector<RESULT_ITEM> items;
+bool isRootDirectory(const std::string& path) {
+	// Check if the path is in the format "X:\"
+	return (path.size() == 3 && path[1] == ':' && path[2] == '\\');
+}
+
+bool isCommonDirectory(const std::string& path) {
+	// Check if the path is a valid directory (not a root) and ends with a backslash
+	return (path.size() > 3 && path[1] == ':' && path[2] == '\\' && path.back() == '\\');
+}
+
+BOOL AssignItems(const std::wstring& directory) {
+	items.clear();
+	std::ifstream resultFile("C:\\SearchConfig\\result.json");
+	if (!resultFile.is_open()) {
+		OutputDebugStringA("Error opening result.json");
+		return FALSE;
+	}
+
+	nlohmann::json resultJson;
+	resultFile >> resultJson;
+	resultFile.close();
+
+	std::string directoryStr(directory.begin(), directory.end());
+
+	for (const auto& entry : resultJson["ResultSet"]) {
+		std::string location = entry["Location"].get<std::string>();
+
+		// Check if the location is under the given directory
+		std::string searchterm;
+		if (isRootDirectory(directoryStr))
+			searchterm = directoryStr;
+		else
+			searchterm = directoryStr + "\\";
+		if (location.find(searchterm) == 0) {
+			RESULT_ITEM item;
+			size_t pos = location.find_last_of('\\');
+			std::string name = location.substr(pos + 1);
+			std::wstring wideName = std::wstring(name.begin(), name.end());
+			item.Name = wideName; // Assign as PCWSTR
+			item.Type = (entry["Type"].get<std::string>() == "File") ? 0 : 1;
+			
+			items.push_back(item);
+		}
+	}
+
+	return !items.empty();
+}
+
+std::wstring NormalizeFilePath(const std::wstring& filePath) {
+	// Remove the "\\\\?\\" prefix if it exists
+	if (filePath.rfind(L"\\\\?\\", 0) == 0) {
+		return filePath.substr(4);
+	}
+	return filePath;
+}
+
+void AddEntries(PVOID startEntry) {
+	const ULONG FixedSize = offsetof(FILE_ID_BOTH_DIR_INFORMATION, FileName);
+	// Total size before alignment
+	char buff[100];
+	PFILE_ID_BOTH_DIR_INFORMATION tempEntry = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
+	
+	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = ALIGN_UP_BY(FixedSize + ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength, sizeof(LONGLONG));
+	
+	for (int i = 0; i < items.size(); i++) {
+		//ULONG AlignedSize = 200;
+		//ULONG newEntrySize = sizeof(FILE_ID_BOTH_DIR_INFORMATION) + sizeof(WCHAR) * (wcslen(L"NewMyFolder") + 1);
+		//PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)malloc(newEntrySize);
+		PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)((BYTE*)tempEntry + tempEntry->NextEntryOffset);
+
+		if (newEntry != nullptr) {
+			// Fill in the new entry's data
+			newEntry->FileNameLength = (wcslen(items.at(i).Name.c_str())) * sizeof(wchar_t);
+			wcscpy_s(newEntry->FileName, items.at(i).Name.length() + 1, items.at(i).Name.c_str()); // Copy string
+			if (i != items.size()-1) newEntry->NextEntryOffset = ALIGN_UP_BY(FixedSize + newEntry->FileNameLength, sizeof(LONGLONG)); // This will be the last entry
+			if (i == items.size()-1) newEntry->NextEntryOffset = NO_MORE_ENTRIES;
+			if (items.at(i).Type == 1) newEntry->FileAttributes = FILE_ATTRIBUTE_DIRECTORY; // Set desired attributes
+			if(items.at(i).Type == 0) newEntry->FileAttributes = FILE_ATTRIBUTE_NORMAL; // Set desired attributes
+
+			//newEntry->FileIndex = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileIndex; // Set file index appropriately
+			//newEntry->CreationTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->CreationTime.QuadPart; // Set creation time if needed
+			//newEntry->LastAccessTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastAccessTime.QuadPart; // Set last access time if needed
+			//newEntry->LastWriteTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastWriteTime.QuadPart; // Set last write time if needed
+			//newEntry->ChangeTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->ChangeTime.QuadPart; // Set change time if needed
+			//newEntry->EndOfFile.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EndOfFile.QuadPart; // Set end of file size if needed
+			//newEntry->AllocationSize.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->AllocationSize.QuadPart; // Set allocation size if needed
+			//newEntry->FileId.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileId.QuadPart; // Set file ID if needed
+			//newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EaSize; // Set file ID if needed
+
+			newEntry->ShortNameLength = 0;
+
+		}
+		tempEntry = newEntry;
+		//free(newEntry); // Don't forget to free allocated memory
+	}
+};
+
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	HANDLE FileHandle,
@@ -1376,6 +1545,8 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 	PVOID	currFile;
 	PVOID	prevFile;
 
+	char buffer[100];
+	
 	// Call the original function
 	NTSTATUS status = Real_NtQueryDirectoryFile(
 		FileHandle,
@@ -1393,71 +1564,49 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
-
 		std::wstring filePath = GetFilePathFromHandle(FileHandle);
+		std::wstring normalizedPath = NormalizeFilePath(filePath);
+		OutputDebugStringW(normalizedPath.c_str());
 
-		if (filePath == L"\\\\\?\\C:\\Users\\KDark\\Downloads\\nothing") {
-			OutputDebugStringW(filePath.c_str());
+		if (normalizedPath == GetGlobalDirectoryString()) {
+			if (CheckPermittedDrive(normalizedPath)) {
+				//if (IsSearchOperation()) OutputDebugStringA("Search is progressing");
+				// get first file
+				currFile = FileInformation;
+				prevFile = NULL;
+				/*
+				std::string stdStrTemp(normalizedPath.begin(), normalizedPath.end());
+				if (!isRootDirectory(stdStrTemp)) {
+					// Iterate to the last file entry
+					for (int i = 0; i < 1; i++) {
+						WCHAR* cfileName = (WCHAR*)getDirEntryFileName(currFile, FileInformationClass);
+						//OutputDebugStringW(cfileName);
+						//sprintf(buffer, "Next Entry Offset : %lu", getNextEntryOffset(currFile, FileInformationClass));
+						//OutputDebugStringA(buffer);
+						//sprintf(buffer, "Address of Current File : %lu", (ULONG)currFile);
+						//OutputDebugStringA(buffer);
+						prevFile = currFile;
+						currFile = (BYTE*)currFile + getNextEntryOffset(currFile, FileInformationClass);
+					}
+				}*/
+				//OutputDebugStringW((WCHAR*)getDirEntryFileName(currFile, FileInformationClass));
+				//sprintf(buffer, "Next Entry Offset : %lu", getNextEntryOffset(currFile, FileInformationClass));
+				//OutputDebugStringA(buffer);
+				//sprintf(buffer, "Address of Current File : %lu", (ULONG)currFile);
+				//OutputDebugStringA(buffer);
 
-			// get first file
-			currFile = FileInformation;
-			prevFile = NULL;
+				//((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
+				//wcscpy_s(((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileName, wcslen(L"Fake") + 1, L"Fake"); // Adjust size as necessary
+				//((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileNameLength = sizeof(L"Fake") - sizeof(WCHAR);			
 
-			// Iterate to the last file entry
-			while (getNextEntryOffset(currFile, FileInformationClass) != NO_MORE_ENTRIES) {
-				WCHAR* cfileName = (WCHAR*)getDirEntryFileName(currFile, FileInformationClass);
-				OutputDebugStringW(cfileName);
-				prevFile = currFile;
-				currFile = (BYTE*)currFile + getNextEntryOffset(currFile, FileInformationClass);
+				//LogUnicodeString(FileName);
+				if (AssignItems(normalizedPath)) {
+					AddEntries(currFile);
+				}
 			}
-
-			((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
-			wcscpy_s(((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileName, wcslen(L"Fake") + 1, L"Fake"); // Adjust size as necessary
-			((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileNameLength = sizeof(L"Fake") - sizeof(WCHAR);
-
-			//ULONG newEntrySize = sizeof(FILE_ID_BOTH_DIR_INFORMATION) + sizeof(WCHAR) * (wcslen(L"NewFile.txt") + 1);
-			//PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)malloc(newEntrySize);
-			//if (newEntry) {
-			//	// Fill in the new entry's data
-			//	newEntry->NextEntryOffset = NO_MORE_ENTRIES; // This will be the last entry
-			//	newEntry->FileIndex = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->FileIndex; // Set file index appropriately
-			//	newEntry->FileAttributes = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->FileAttributes; // Set desired attributes
-			//	newEntry->CreationTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->CreationTime.QuadPart; // Set creation time if needed
-			//	newEntry->LastAccessTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->LastAccessTime.QuadPart; // Set last access time if needed
-			//	newEntry->LastWriteTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->LastWriteTime.QuadPart; // Set last write time if needed
-			//	newEntry->ChangeTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->ChangeTime.QuadPart; // Set change time if needed
-			//	newEntry->EndOfFile.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->EndOfFile.QuadPart; // Set end of file size if needed
-			//	newEntry->AllocationSize.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->AllocationSize.QuadPart; // Set allocation size if needed
-			//	newEntry->FileId.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->FileId.QuadPart; // Set file ID if needed
-			//	newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)prevFile)->EaSize; // Set file ID if needed
-			//
-			//	newEntry->FileNameLength = sizeof(L"NewFile.txt") - sizeof(WCHAR);
-			//	wcscpy_s(newEntry->FileName, wcslen(L"NewFile.txt") + 1, L"NewFile.txt"); // Adjust size as necessary
-			//	newEntry->ShortNameLength = 0;
-			//
-			//	// Move existing entries to make space for the new entry
-			//	ULONG currentLength = Length;
-			//	PVOID newFileInformation = malloc(currentLength + newEntrySize);
-			//	if (newFileInformation) {
-			//		int delta;
-			//		int nBytes;
-			//		// number of bytes between the 2 addresses
-			//		delta = ((ULONG)currFile) - (ULONG)FileInformation;
-			//		nBytes = (ULONG)Length - delta;
-			//
-			//		if (prevFile) {
-			//			((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->NextEntryOffset = nBytes;
-			//		}
-			//
-			//		RtlCopyMemory((BYTE*)newFileInformation, FileInformation, currentLength);
-			//		RtlCopyMemory((BYTE*)newFileInformation + currentLength, newEntry, newEntrySize);
-			//		Length += newEntrySize;
-			//		FileInformation = newFileInformation;
-			//	}
-			//
-			//	free(newEntry); // Don't forget to free allocated memory
-			//}
 		}
+		else SetGlobalDirectoryString(L"");
+
 	}
 
 	return status;

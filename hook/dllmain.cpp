@@ -18,6 +18,7 @@ static BOOL InstallHook(LPCSTR dll, LPCSTR function, LPVOID* originalFunction, L
 	return false;
 }
 
+
 void mainhook() {
 	DetourTransactionBegin();
 	DetourUpdateThread(GetCurrentThread());
