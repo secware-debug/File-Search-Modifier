@@ -2,116 +2,52 @@
 #ifndef __API_H__
 #define __API_H__
 #include <Windows.h>
-//#include <winternl.h>
 #include <shlwapi.h> // For SHRegGetPathW
 #include <fstream>
 #include <string>
 #include <iostream>
 #include <shobjidl_core.h>
 #include <regex>
-#include <atlcomcli.h>  // for COM smart pointers
-#include <atlbase.h>    // for COM smart pointers
+#include <atlcomcli.h> 
+#include <atlbase.h> 
 #include "resource.h"
 #include <shlobj.h>
 #include <vector>
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <tchar.h>
+#include <shobjidl.h>  // for IKnownFolder
+#include <comdef.h>     // for CComPtr
+#include <shlobj_core.h>
+#pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Shell32.lib")
+#pragma comment(lib, "Mpr.lib")
 
 #define NT_SUCCESS(Status)			((NTSTATUS)(Status) >= 0)
 #ifndef STATUS_NO_MORE_FILES
 #define STATUS_NO_MORE_FILES ((NTSTATUS)0x80000006L)
 #endif
 
-#pragma comment(lib, "Shlwapi.lib")
-#pragma comment(lib, "Shell32.lib")
-#pragma comment(lib, "Mpr.lib") 
 #define SEARCH_PIPE_NAME "\\\\.\\pipe\\SEARCHDEBUGLOG"
-// Global variables
-HANDLE g_hPipe = NULL;
 
-std::wstring g_strSearchDirectory = L"";
-void SetGlobalDirectoryString(const std::wstring& newValue) {
-	g_strSearchDirectory = newValue;
-}
-std::wstring GetGlobalDirectoryString() {
-	return g_strSearchDirectory;
-}
+#define ALIGN_UP_BY(length, alignment) \
+    (((length) + ((alignment) - 1)) & ~((alignment) - 1))
 
-std::wstring g_strSearchWord = L"";
-void SetGlobalSearchWord(const std::wstring& newValue) {
-	g_strSearchWord = newValue;
-}
-std::wstring GetGlobalSearchWord() {
-	return g_strSearchWord;
-}
+#define ALIGN_UP_POINTER_BY(pointer, alignment) \
+    ((PVOID)ALIGN_UP_BY((ULONG_PTR)(pointer), (alignment)))
 
-std::string WStringToString(const std::wstring& wstr)
-{
-	std::string str;
-	size_t size;
-	str.resize(wstr.length());
-	wcstombs_s(&size, &str[0], str.size() + 1, wstr.c_str(), wstr.size());
-	return str;
-}
+#define PREFIX_SIZE				8
 
-void writeLog(const char* message) {
-	OutputDebugStringA(message);
-}
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 
-void writeLog(int value) {
-	std::string message = std::to_string(value);
-	OutputDebugStringA(message.c_str());
-}
-
-void writeLog(const wchar_t* message) {
-	OutputDebugStringW(message);
-}
-
-void notify(std::wstring value) {
-	//OutputDebugStringA(__FUNCTION__);
-	std::string stringvalue = WStringToString(value);
-	OutputDebugStringA(stringvalue.c_str());
-	if (g_hPipe != NULL)
-	{
-		WriteFile(g_hPipe, stringvalue.c_str(), stringvalue.length(), NULL, NULL);
-	}
-}
-
-bool CreateRegistryKeyAndSetValues(HKEY hKeyParent, const std::string& subKey, const std::string& valueName1, const std::string& valueData1) {
-	HKEY hKey;
-	LONG lResult;
-	DWORD dwDisposition;
-	writeLog("1");
-	writeLog(subKey.c_str());
-	writeLog(valueName1.c_str());
-	writeLog(valueData1.c_str());
-	// Create or open the registry key
-	//lResult = RegCreateKeyEx(hKeyParent, subKey.c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, &dwDisposition);
-	//writeLog("11");
-
-	//if (lResult != ERROR_SUCCESS) {
-	//	return false;
-	//}
-	//writeLog("2");
-	//
-	//// Set the first string value
-	//lResult = RegSetValueEx(hKey, valueName1.c_str(), 0, REG_SZ, (const BYTE*)valueData1.c_str(), valueData1.length());
-	//if (lResult != ERROR_SUCCESS) {
-	//	RegCloseKey(hKey);
-	//	return false;
-	//}
-	//writeLog("3");
-	//
-	//// Close the registry key
-	//RegCloseKey(hKey);
-	//writeLog("4");
-
-	return true;
-}
+#define NO_MORE_ENTRIES		0
 
 typedef LONG NTSTATUS;
-#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+typedef struct _RESULT_ITEM {
+	int Type;
+	std::wstring Name;
+}RESULT_ITEM, * PRESULT_ITEM;
+
 
 typedef struct _IO_STATUS_BLOCK
 {
@@ -132,14 +68,6 @@ typedef struct _STRING
 	USHORT MaximumLength;
 	PCHAR  Buffer;
 } ANSI_STRING, * PANSI_STRING;
-
-typedef enum _OBJECT_INFORMATION_CLASS {
-	ObjectBasicInformation,
-	ObjectNameInformation,
-	ObjectTypeInformation,
-	ObjectAllInformation,
-	ObjectDataInformation
-} OBJECT_INFORMATION_CLASS;
 
 typedef struct _OBJECT_NAME_INFORMATION {
 	UNICODE_STRING Name;
@@ -202,10 +130,8 @@ typedef enum class _FILE_INFORMATION_CLASS
 	FileNumaNodeInformation,                        // 53
 	FileStandardLinkInformation,                    // 54
 	FileRemoteProtocolInformation,                  // 55
-
 	FileRenameInformationBypassAccessCheck,         // 56
 	FileLinkInformationBypassAccessCheck,           // 57
-
 	FileVolumeNameInformation,                      // 58
 	FileIdInformation,                              // 59
 	FileIdExtdDirectoryInformation,                 // 60
@@ -228,19 +154,6 @@ typedef enum class _FILE_INFORMATION_CLASS
 
 	FileMaximumInformation
 } FILE_INFORMATION_CLASS, * PFILE_INFORMATION_CLASS;
-
-// Function pointer type for NtQueryObject
-typedef NTSTATUS(NTAPI* NtQueryObjectFunc)(
-	HANDLE Handle,
-	OBJECT_INFORMATION_CLASS ObjectInformationClass,
-	PVOID ObjectInformation,
-	ULONG ObjectInformationLength,
-	PULONG ReturnLength
-	);
-
-// Global pointer for NtQueryObject
-NtQueryObjectFunc NtQueryObject = nullptr;
-
 
 typedef struct _FILE_BOTH_DIRECTORY_INFORMATION
 {
@@ -395,196 +308,46 @@ typedef VOID(NTAPI* PIO_APC_ROUTINE)(
 	IN ULONG Reserved);
 
 
+// Global variables
+const WCHAR prefix[] = L"hook";
+const WCHAR newPrefix[] = L"yess";
 
 HKEY g_searchkey = NULL;
 wchar_t g_pszPath[MAX_PATH] = { 0 };
+HANDLE g_hPipe = NULL;
+std::wstring g_strSearchDirectory = L"";
+std::wstring g_strSearchWord = L"";
 
-typedef DWORD(WINAPI* TypeIsMSSearchEnabled)(
-	LPWSTR lpMachineName,
-	BOOL* flag
-	);
-TypeIsMSSearchEnabled originalISMSSearchEnabled = NULL;
-
-typedef DWORD(WINAPI* TypeSHCreateScope) (
-	DWORD a1,
-	IID* riid,
-	void** ppv
-	);
-TypeSHCreateScope originalSHCreateScope = NULL;
-
-typedef DWORD(WINAPI* TypeSHCreateAutoList) (
-	int a1,
-	int a2,
-	IID* riid,
-	void** ppv
-	);
-TypeSHCreateAutoList originalSHCreateAutoList = NULL;
-
-typedef DWORD(WINAPI* TypeSHCreateScopeItemFromShellItem) (
-	IUnknown* punk,
-	int a2,
-	int a3,
-	int a4,
-	IID* riid,
-	void** a6
-	);
-TypeSHCreateScopeItemFromShellItem originalSHCreateScopeItemFromShellItem = NULL;
-
-typedef DWORD(WINAPI* TypeCreateDefaultProviderResolver) (
-	IID* riid,
-	void** ppv
-	);
-TypeCreateDefaultProviderResolver originalCreateDefaultProviderResolver = NULL;
-
-typedef DWORD(WINAPI* TypeSHCreateAutoListWithID) (
-	int a1,
-	int a2,
-	int a3,
-	int a4,
-	char a5,
-	IID* a6,
-	void* a7
-	);
-TypeSHCreateAutoListWithID originSHCreateAutoListWithID = NULL;
-
-typedef LONG(WINAPI* RegSetValueExWType)(
-	HKEY hKey,
-	LPCWSTR lpValueName,
-	DWORD Reserved,
-	DWORD dwType,
-	const BYTE* lpData,
-	DWORD cbData
-	);
-RegSetValueExWType OriginalRegSetValueExW = nullptr;
-
-// Typedef for the original RegCreateKeyExW function
-typedef LONG(WINAPI* RegCreateKeyExWType)(
-	HKEY hKey,
-	LPCWSTR lpSubKey,
-	DWORD Reserved,
-	LPWSTR lpClass,
-	DWORD dwOptions,
-	REGSAM samDesired,
-	LPSECURITY_ATTRIBUTES lpSecurityAttributes,
-	PHKEY phkResult,
-	LPDWORD lpdwDisposition
-	);
-RegCreateKeyExWType OriginalRegCreateKeyExW = nullptr;
-
-typedef INT(WINAPI* TypeCreateResultSetFactory) (
-	int a1,
-	int a2,
-	IID* riid,
-	void** ppv
-	);
-TypeCreateResultSetFactory originalCreateResultSetFactory = nullptr;
-
-
-typedef INT(WINAPI* TypeCreateSingleVisibleInList) (
-	LPCWSTR pszStr1,
-	int a2,
-	void** a3
-	);
-TypeCreateSingleVisibleInList originalCreateSingleVisibleInList = nullptr;
-
-typedef HRESULT(WINAPI* TypeGetScopeFolderType) (
-	int* a1,
-	DWORD* a2
-	);
-TypeGetScopeFolderType originalGetScopeFolderType = nullptr;
-
-typedef int (WINAPI* TypeIsShellItemInSearchIndex) (
-	int a1,
-	int a2,
-	DWORD* a3,
-	int a4
-	);
-TypeIsShellItemInSearchIndex originalIsShellItemInSearchIndex = nullptr;
-
-typedef int (WINAPI* TypeSEARCH_WriteAutoListContents) (
-	int a1,
-	int a2
-	);
-TypeSEARCH_WriteAutoListContents originalSEARCH_WriteAutoListContents;
-
-typedef BOOL(WINAPI* PathIsDirectoryW_t)(LPCWSTR pszPath);
-PathIsDirectoryW_t TruePathIsDirectoryW = nullptr;
-
-typedef NTSTATUS(NTAPI* NtQueryDirectoryFile)(
-	IN HANDLE FileHandle,
-	IN HANDLE Event,
-	IN PIO_APC_ROUTINE ApcRoutine,
-	IN PVOID ApcContext,
-	OUT PIO_STATUS_BLOCK IoStatusBlock,
-	OUT PVOID FileInformation,
-	IN ULONG Length,
-	IN FILE_INFORMATION_CLASS FileInformationClass,
-	IN BOOLEAN ReturnSingleEntry,
-	IN PUNICODE_STRING FileName,
-	IN BOOLEAN RestartScan);
-
-typedef NTSTATUS(NTAPI* NtQueryDirectoryFileEx)(
-	IN HANDLE FileHandle,
-	IN HANDLE Event,
-	IN PIO_APC_ROUTINE ApcRoutine,
-	IN PVOID ApcContext,
-	OUT PIO_STATUS_BLOCK IoStatusBlock,
-	OUT PVOID FileInformation,
-	IN ULONG Length,
-	IN FILE_INFORMATION_CLASS FileInformationClass,
-	IN ULONG QueryFlags,
-	IN PUNICODE_STRING FileName);
-
-NtQueryDirectoryFile TrueNtQueryDirectoryFile = NULL;
-NtQueryDirectoryFileEx TrueNtQueryDirectoryFileEx = NULL;
-
-typedef NTSTATUS(NTAPI* TypeNtOpenFile)(
-	PHANDLE            FileHandle,
-	ACCESS_MASK        DesiredAccess,
-	void* ObjectAttributes,
-	PIO_STATUS_BLOCK   IoStatusBlock,
-	ULONG              ShareAccess,
-	ULONG              OpenOptions
-	);
-
-TypeNtOpenFile TrueNtOpenFile = NULL;
-
-typedef HRESULT(WINAPI* TypeSHOpenFolderAndSelectItems) (
-	PCIDLIST_ABSOLUTE     pidlFolder,
-	UINT                  cidl,
-	PCUITEMID_CHILD_ARRAY apidl,
-	DWORD                 dwFlags
-	);
-TypeSHOpenFolderAndSelectItems TrueSHOpenFolderAndSelectItems = NULL;
-
-DWORD HookedISMSSearchEnabled(
-	LPWSTR lpMachineName,
-	BOOL* flag
-)
-{
-	writeLog(__FUNCTION__);
-	return originalISMSSearchEnabled(lpMachineName, flag);
+void SetGlobalDirectoryString(const std::wstring& newValue) {
+	g_strSearchDirectory = newValue;
+}
+std::wstring GetGlobalDirectoryString() {
+	return g_strSearchDirectory;
+}
+void SetGlobalSearchWord(const std::wstring& newValue) {
+	g_strSearchWord = newValue;
+}
+std::wstring GetGlobalSearchWord() {
+	return g_strSearchWord;
 }
 
-DWORD HookedSHCreateScope(
-	DWORD a1,
-	IID* riid,
-	void** ppv
-)
+std::string WStringToString(const std::wstring& wstr)
 {
-	writeLog(__FUNCTION__);
-	return originalSHCreateScope(a1, riid, ppv);
+	std::string str;
+	size_t size;
+	str.resize(wstr.length());
+	wcstombs_s(&size, &str[0], str.size() + 1, wstr.c_str(), wstr.size());
+	return str;
 }
 
-DWORD HookedSHCreateAutoList(
-	int a1,
-	int a2,
-	IID* riid,
-	void** ppv
-)
-{
-	writeLog(__FUNCTION__);
-	return originalSHCreateAutoList(a1, a2, riid, ppv);
+void notify(std::wstring value) {
+	//OutputDebugStringA(__FUNCTION__);
+	std::string stringvalue = WStringToString(value);
+	OutputDebugStringA(stringvalue.c_str());
+	if (g_hPipe != NULL)
+	{
+		WriteFile(g_hPipe, stringvalue.c_str(), stringvalue.length(), NULL, NULL);
+	}
 }
 
 std::wstring extractLocation(const std::wstring& searchUri) {
@@ -648,7 +411,6 @@ std::wstring extractCrumbValue(const std::wstring& input) {
 			return input.substr(startPos, endPos - startPos);
 		}
 	}
-
 	// Return an empty string if not found
 	return L"";
 }
@@ -723,270 +485,7 @@ DWORD WINAPI CreatePipe(LPVOID lpParam)
 		Sleep(1000);
 	}
 	OutputDebugStringA("Pipe is created");
-}
-
-DWORD HookedSHCreateScopeItemFromShellItem(
-	IUnknown* punk,
-	int a2,
-	int a3,
-	int a4,
-	IID* riid,
-	void** a6
-)
-{
-	DWORD result;
-
-	LPITEMIDLIST current_folder;
-	HRESULT hres = SHGetIDListFromObject((IUnknown*)punk, &current_folder);
-	CComHeapPtr<wchar_t> pSearch;
-	CComHeapPtr<wchar_t> pPath;
-
-	//win11
-	//::SHGetNameFromIDList(current_folder, SIGDN_PARENTRELATIVEPARSING, &pSearch);
-	//writeLog(static_cast<LPWSTR>(pSearch));
-
-	//win10
-	::SHGetNameFromIDList(current_folder, SIGDN_PARENTRELATIVEFORADDRESSBAR, &pSearch);
-	std::wstring input = static_cast<LPWSTR>(pSearch);
-	writeLog(input.c_str());
-	std::wstring searchword = extractCrumbValue(input);
-	if (searchword.length() > 0)
-	{
-		std::wstring searchpath = extractLocation(input);
-		notify(searchword + L"&" + searchpath);
-
-		const std::wstring prefix = L"C:\\";
-		if (searchpath.compare(0, prefix.length(), prefix) == 0)
-		{
-			punk = NULL;
-		}
-	}
-
-	result = originalSHCreateScopeItemFromShellItem(punk, a2, a3, a4, riid, a6);
-
-	return result;
-}
-
-HRESULT HookedCreateDefaultProviderResolver(
-	IID* riid,
-	void** ppv
-)
-{
-	writeLog(__FUNCTION__);
-	return originalCreateDefaultProviderResolver(riid, ppv);
-}
-
-DWORD HookedSHCreateAutoListWithID(
-	int a1,
-	int a2,
-	int a3,
-	int a4,
-	char a5,
-	IID* a6,
-	void* a7
-)
-{
-	writeLog(__FUNCTION__);
-	return  originSHCreateAutoListWithID(a1, a2, a3, a4, a5, a6, a7);
-}
-
-std::wstring ConvertBinaryToWString(const BYTE* lpData, DWORD cbData)
-{
-	std::wstring result;
-
-	// Iterate over the data in pairs of bytes (2 bytes = 1 wchar_t)
-	for (DWORD i = 0; i < cbData; i += 2)
-	{
-		// Ensure there are at least two bytes left to form a wchar_t
-		if (i + 1 < cbData)
-		{
-			// Combine low and high bytes into a wchar_t
-			wchar_t wChar = (lpData[i + 1] << 8) | lpData[i];
-			result += wChar;
-		}
-	}
-
-	return result;
-}
-LONG WINAPI HookedRegSetValueExW(
-	HKEY hKey,
-	LPCWSTR lpValueName,
-	DWORD Reserved,
-	DWORD dwType,
-	const BYTE* lpData,
-	DWORD cbData
-)
-{
-	if (g_searchkey == hKey && dwType == REG_BINARY && lpData != nullptr && cbData > 0)
-	{
-		std::wstring binaryDataAsWString = ConvertBinaryToWString(lpData, cbData);
-		//MessageBoxW(NULL, binaryDataAsWString.c_str(), L"search value", MB_OK | MB_ICONINFORMATION);
-		writeLog(binaryDataAsWString.c_str());
-		writeLog(g_pszPath);
-
-		//MessageBoxW(NULL, g_pszPath, L"search path", MB_OK | MB_ICONINFORMATION);
-	}
-
-
-	// Call the original function
-	return OriginalRegSetValueExW(hKey, lpValueName, Reserved, dwType, lpData, cbData);
-}
-
-// Hooked function for RegCreateKeyExW
-LONG WINAPI HookedRegCreateKeyExW(
-	HKEY hKey,
-	LPCWSTR lpSubKey,
-	DWORD Reserved,
-	LPWSTR lpClass,
-	DWORD dwOptions,
-	REGSAM samDesired,
-	LPSECURITY_ATTRIBUTES lpSecurityAttributes,
-	PHKEY phkResult,
-	LPDWORD lpdwDisposition
-)
-{
-	LONG Result;
-	Result = OriginalRegCreateKeyExW(hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecurityAttributes, phkResult, lpdwDisposition);
-
-	// Check if lpSubKey contains "WordWheelQuery"
-	if (lpSubKey != nullptr && wcsstr(lpSubKey, L"WordWheelQuery") != nullptr)
-	{
-		//MessageBoxW(NULL, L"Registry key being created contains WordWheelQuery!", L"Registry Hook", MB_OK | MB_ICONINFORMATION);
-		g_searchkey = *phkResult;
-	}
-
-	return Result;
-}
-
-INT HookCreateResultSetFactory(
-	int a1,
-	int a2,
-	IID* riid,
-	void** ppv
-)
-{
-	writeLog(__FUNCTION__);
-	return originalCreateResultSetFactory(a1, a2, riid, ppv);
-}
-
-INT HookCreateSingleVisibleInList(
-	LPCWSTR pszStr1,
-	int a2,
-	void** a3
-)
-{
-	writeLog(__FUNCTION__);
-	return originalCreateSingleVisibleInList(pszStr1, a2, a3);
-}
-
-HRESULT HookGetScopeFolderType(
-	int* a1,
-	DWORD* a2
-)
-{
-	writeLog(__FUNCTION__);
-	return originalGetScopeFolderType(a1, a2);
-}
-
-int HookIsShellItemInSearchIndex(
-	int a1,
-	int a2,
-	DWORD* a3,
-	int a4
-)
-{
-	writeLog(__FUNCTION__);
-	return originalIsShellItemInSearchIndex(a1, a2, a3, a4);
-}
-
-int HookSEARCH_WriteAutoListContents(
-	int a1,
-	int a2
-)
-{
-	writeLog(__FUNCTION__);
-	return originalSEARCH_WriteAutoListContents(a1, a2);
-}
-
-BOOL WINAPI DetourPathIsDirectoryW(LPCWSTR pszPath) {
-	//writeLog(__FUNCTION__);
-	//writeLog(pszPath);
-	wcscpy(g_pszPath, pszPath);
-	return TruePathIsDirectoryW(pszPath);
-}
-
-BOOL RegexCompare(PWCHAR FileName, int NumCharacters)
-{
-	std::wstring ws(FileName, FileName + NumCharacters);
-	//std::wstring regVal = RegistryGetString(HKEY_CURRENT_USER, REG_SUBKEY_NAME, REG_VALUE_NAME_REGEX);
-	std::wstring regVal;
-
-	if (regVal.empty())
-		return FALSE;
-
-	return std::regex_match(ws, std::wregex(regVal));
-}
-
-template <class fiType>
-void CheckAndModifyMatchingDetails(fiType FileInformation)
-{
-	for (fiType OldFileInformation = NULL; OldFileInformation != FileInformation;
-		FileInformation = (fiType)((char*)FileInformation + FileInformation->NextEntryOffset))
-	{
-
-		// Save current pointer address
-		OldFileInformation = FileInformation;
-
-
-
-		// Ignore "." and ".."
-		if (FileInformation->FileNameLength == 2 && !memcmp(FileInformation->FileName, L".", 2) ||
-			FileInformation->FileNameLength == 4 && !memcmp(FileInformation->FileName, L"..", 4))
-		{
-			//writeLog(FileInformation->);
-			continue;
-		}
-
-		// Hide files if they match the loaded regular expression list
-		if (RegexCompare(FileInformation->FileName, FileInformation->FileNameLength / sizeof(WCHAR)))
-			FileInformation->FileAttributes |= FILE_ATTRIBUTE_HIDDEN;
-	}
-}
-
-BOOL ModifyFileInformation(FILE_INFORMATION_CLASS FileInformationClass, PVOID FileInformation)
-{
-	switch (FileInformationClass)
-	{
-	case FILE_INFORMATION_CLASS::FileDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_DIRECTORY_INFORMATION>((PFILE_DIRECTORY_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_ID_BOTH_DIR_INFORMATION>((PFILE_ID_BOTH_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileBothDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_BOTH_DIR_INFORMATION>((PFILE_BOTH_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileIdFullDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_ID_FULL_DIR_INFORMATION>((PFILE_ID_FULL_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileFullDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_FULL_DIR_INFORMATION>((PFILE_FULL_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileIdGlobalTxDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_ID_GLOBAL_TX_DIR_INFORMATION>((PFILE_ID_GLOBAL_TX_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileIdExtdDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_ID_EXTD_DIR_INFORMATION>((PFILE_ID_EXTD_DIR_INFORMATION)FileInformation);
-		break;
-	case FILE_INFORMATION_CLASS::FileIdExtdBothDirectoryInformation:
-		CheckAndModifyMatchingDetails<PFILE_ID_EXTD_BOTH_DIR_INFORMATION>((PFILE_ID_EXTD_BOTH_DIR_INFORMATION)FileInformation);
-		break;
-	default:
-		return FALSE;
-	}
-
-	return TRUE;
-}
+} 
 
 std::string GetFullPathFromHandle(HANDLE hFile) {
 	// Check if the handle is valid
@@ -1006,93 +505,9 @@ std::string GetFullPathFromHandle(HANDLE hFile) {
 	return std::string(buffer);
 }
 
-NTSTATUS NTAPI NewNtQueryDirectoryFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine,
-	PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
-	FILE_INFORMATION_CLASS FileInformationClass, BOOLEAN ReturnSingleEntry, PUNICODE_STRING FileName,
-	BOOLEAN RestartScan)
-{
-	OutputDebugStringA((const char*)"Hooked NewNtQueryDirectoryFile\n");
-
-	NTSTATUS ret = TrueNtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
-
-	if (ret != STATUS_SUCCESS)
-		return ret;
-	std::string fullPath = GetFullPathFromHandle(FileHandle);
-	writeLog(fullPath.c_str());
-	// Modify NewNtQueryDirectoryFile file attributes
-	ModifyFileInformation(FileInformationClass, FileInformation);
-
-	return ret;
-}
-
-NTSTATUS NTAPI NewNtQueryDirectoryFileEx(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine,
-	PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
-	FILE_INFORMATION_CLASS FileInformationClass, ULONG QueryFlags, PUNICODE_STRING FileName)
-{
-	OutputDebugStringA("Hooked NewNtQueryDirectoryFileEx\n");
-
-	NTSTATUS ret = TrueNtQueryDirectoryFileEx(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, QueryFlags, FileName);
-
-	if (ret != STATUS_SUCCESS)
-		return ret;
-
-	std::string fullPath = GetFullPathFromHandle(FileHandle);
-	writeLog(fullPath.c_str());
-
-	// Modify NewNtQueryDirectoryFileEx file attributes
-	ModifyFileInformation(FileInformationClass, FileInformation);
-
-	return ret;
-}
-
-NTSTATUS NewNtOpenFile(PHANDLE            FileHandle,
-	ACCESS_MASK        DesiredAccess,
-	void* ObjectAttributes,
-	PIO_STATUS_BLOCK   IoStatusBlock,
-	ULONG              ShareAccess,
-	ULONG              OpenOptions)
-{
-	NTSTATUS result;
-	result = TrueNtOpenFile(FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, ShareAccess, OpenOptions);
-	if (result != STATUS_SUCCESS)
-		return result;
-
-	OutputDebugStringA("Hooked NewNtOpenFile\n");
-	std::string fullPath = GetFullPathFromHandle(*FileHandle);
-	writeLog(fullPath.c_str());
-	return result;
-}
-
-HRESULT NewSHOpenFolderAndSelectItems(
-	PCIDLIST_ABSOLUTE     pidlFolder,
-	UINT                  cidl,
-	PCUITEMID_CHILD_ARRAY apidl,
-	DWORD                 dwFlags
-)
-{
-	writeLog(__FUNCDNAME__);
-	return TrueSHOpenFolderAndSelectItems(pidlFolder, cidl, apidl, dwFlags);
-}
-
-BOOL CheckSearchSTate(const std::wstring& input) {
-	const std::wstring prefix = L"search-ms:";
-
-	// Check if the input starts with "search-ms:"
-	if (input.find(prefix) == 0) {
-		std::wcout << L"The input starts with \"search-ms:\"." << std::endl;
-	}
-	else {
-		std::wcout << L"The input does not start with \"search-ms:\"." << std::endl;
-	}
-}
-
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
 SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
-#include <shobjidl.h>  // for IKnownFolder
-#include <shlobj.h>     // for SHGetKnownFolderFromPath
-#include <comdef.h>     // for CComPtr
-#include <shlobj_core.h>     // for CComPtr
-#include <windows.h>    // for HRESULT
+
 HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl) {
 	// Call the original function
 	HRESULT result = TrueSHGetIDListFromObject(punk, ppidl);
@@ -1103,14 +518,12 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		CComHeapPtr<wchar_t> pPath;
 		::SHGetNameFromIDList(*ppidl, SIGDN_PARENTRELATIVEFORADDRESSBAR, &pSearch);
 		std::wstring input = static_cast<LPWSTR>(pSearch);
-		//notify( L"Input value is" + input);
 		std::wstring searchword = extractCrumbValue(input);
 		SetGlobalSearchWord(searchword);
 		if (searchword.length() > 0)
 		{			
 			std::wstring searchpath = extractLocation(input);
 			SetGlobalDirectoryString(searchpath);
-			//notify(searchword + L"&" + searchpath);
 			const std::wstring prefix = L"C:\\";
 			if (searchpath.compare(0, prefix.length(), prefix) == 0)
 			{
@@ -1126,8 +539,6 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		std::wstring specialsearchpath = extractSearchLocation(input);
 		if (specialsearchpath.length() > 0)
 		{
-			//writeLog(input.c_str());
-			//writeLog(specialsearchpath.c_str());
 			notify(L"speical context &" + specialsearchpath);
 			const std::wstring prefix = L"C:\\";
 			if (specialsearchpath.compare(0, prefix.length(), prefix) == 0)
@@ -1141,101 +552,6 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		OutputDebugStringA("SHGetIDListFromObject failed or PIDL not obtained.\n");
 	}
 
-	return result;
-}
-
-typedef HRESULT(WINAPI* SHCreateItemFromParsingName_t)(
-	PCWSTR pszPath,
-	IBindCtx* pbc,
-	REFIID riid,
-	void** ppv);
-SHCreateItemFromParsingName_t TrueSHCreateItemFromParsingName = nullptr;
-// Hook function
-HRESULT WINAPI HookSHCreateItemFromParsingName(
-	PCWSTR pszPath,
-	IBindCtx* pbc,
-	REFIID riid,
-	void** ppv) {
-
-	// Log the path parameter
-	if (pszPath) {
-		char debugMessage[512];
-		sprintf_s(debugMessage, "SHCreateItemFromParsingName Hooked! Path: %ws\n", pszPath);
-		OutputDebugStringA(debugMessage);
-	}
-	else {
-		OutputDebugStringA("SHCreateItemFromParsingName Hooked! Path is NULL.\n");
-	}
-
-	// Call the original function
-	HRESULT result = TrueSHCreateItemFromParsingName(pszPath, pbc, riid, ppv);
-
-	// Log whether the function succeeded
-	if (SUCCEEDED(result)) {
-		OutputDebugStringA("SHCreateItemFromParsingName succeeded.\n");
-	}
-	else {
-		OutputDebugStringA("SHCreateItemFromParsingName failed.\n");
-	}
-
-	return result;
-}
-
-// Define the function pointer type for SHCreateItemFromIDList
-typedef HRESULT(WINAPI* SHCreateItemFromIDList_t)(PCIDLIST_ABSOLUTE pidl, REFIID riid, void** ppv);
-SHCreateItemFromIDList_t TrueSHCreateItemFromIDList = nullptr;
-
-HRESULT GetShellItemDisplayName(IShellItem* shellItem, SIGDN sigdnNameType, PWSTR* displayName) {
-	if (shellItem == nullptr) {
-		return E_POINTER;
-	}
-
-	// Retrieve the display name
-	return shellItem->GetDisplayName(sigdnNameType, displayName);
-}
-
-// Hook function for SHCreateItemFromIDList
-HRESULT WINAPI HookSHCreateItemFromIDList(PCIDLIST_ABSOLUTE pidl, REFIID riid, void** ppv) {
-	// Log the riid parameter
-	char debugMessage[512];
-	sprintf_s(debugMessage, "SHCreateItemFromIDList Hooked! IID: {%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}\n",
-		riid.Data1, riid.Data2, riid.Data3,
-		riid.Data4[0], riid.Data4[1], riid.Data4[2], riid.Data4[3],
-		riid.Data4[4], riid.Data4[5], riid.Data4[6], riid.Data4[7]);
-	OutputDebugStringA(debugMessage);
-
-	// Call the original SHCreateItemFromIDList
-	HRESULT result = TrueSHCreateItemFromIDList(pidl, riid, ppv);
-	// If the call succeeded and ppv is not NULL, try to get the display name
-	if (SUCCEEDED(result) && ppv != nullptr) {
-		IShellItem* shellItem = reinterpret_cast<IShellItem*>(*ppv);
-		if (shellItem != nullptr) {
-			PWSTR displayName = nullptr;
-			HRESULT hr = GetShellItemDisplayName(shellItem, SIGDN_PARENTRELATIVEFORADDRESSBAR, &displayName);
-
-			if (SUCCEEDED(hr) && displayName != nullptr) {
-				// Log the display name (file path in this case)
-				char displayNameBuffer[512];
-				WideCharToMultiByte(CP_ACP, 0, displayName, -1, displayNameBuffer, sizeof(displayNameBuffer), NULL, NULL);
-				OutputDebugStringA("Display Name: ");
-				OutputDebugStringA(displayNameBuffer);
-				OutputDebugStringA("\n");
-
-				CoTaskMemFree(displayName); // Free the memory allocated for the display name
-			}
-			else {
-				OutputDebugStringA("Failed to retrieve the display name.\n");
-			}
-		}
-	}
-
-	// Log whether the function succeeded or failed
-	if (SUCCEEDED(result)) {
-		OutputDebugStringA("SHCreateItemFromIDList succeeded.\n");
-	}
-	else {
-		OutputDebugStringA("SHCreateItemFromIDList failed.\n");
-	}
 	return result;
 }
 
@@ -1254,9 +570,6 @@ std::wstring GetFilePathFromHandle(HANDLE fileHandle) {
 	return std::wstring(buffer);
 }
 
-const WCHAR prefix[] = L"hook";
-const WCHAR newPrefix[] = L"yess";
-#define PREFIX_SIZE				8
 
 // check if the file is need to be hidden
 BOOLEAN checkIfHiddenFile(WCHAR fileName[])
@@ -1320,8 +633,6 @@ PVOID getDirEntryFileName
 	return result;
 }
 
-#define NO_MORE_ENTRIES		0
-
 ULONG getNextEntryOffset
 (
 	IN PVOID FileInformation,
@@ -1381,18 +692,6 @@ void setNextEntryOffset
 	}
 }
 
-//////////////////////////////////////////////////////////////////////////
-#define ALIGN_UP_BY(length, alignment) \
-    (((length) + ((alignment) - 1)) & ~((alignment) - 1))
-
-#define ALIGN_UP_POINTER_BY(pointer, alignment) \
-    ((PVOID)ALIGN_UP_BY((ULONG_PTR)(pointer), (alignment)))
-
-typedef struct _RESULT_ITEM {
-	int Type;
-	std::wstring Name;
-}RESULT_ITEM, *PRESULT_ITEM;
-
 BOOL CheckPermittedDrive(const std::wstring& directory) {
 
 	std::vector<std::string> permittedDrives;
@@ -1411,7 +710,6 @@ BOOL CheckPermittedDrive(const std::wstring& directory) {
 	// Extract drive letter from the directory path
 	std::string directoryStr(directory.begin(), directory.end());
 	//std::string driveLetter = directoryStr.substr(0, directoryStr.find(':'));
-
 	return std::find(permittedDrives.begin(), permittedDrives.end(), directoryStr) != permittedDrives.end();
 }
 
@@ -1433,7 +731,6 @@ BOOL AssignItems(const std::wstring& directory) {
 		OutputDebugStringA("Error opening result.json");
 		return FALSE;
 	}
-
 	nlohmann::json resultJson;
 	resultFile >> resultJson;
 	resultFile.close();
@@ -1475,15 +772,11 @@ std::wstring NormalizeFilePath(const std::wstring& filePath) {
 void AddEntries(PVOID startEntry) {
 	const ULONG FixedSize = offsetof(FILE_ID_BOTH_DIR_INFORMATION, FileName);
 	// Total size before alignment
-	char buff[100];
 	PFILE_ID_BOTH_DIR_INFORMATION tempEntry = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
 	
 	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = ALIGN_UP_BY(FixedSize + ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength, sizeof(LONGLONG));
 	
 	for (int i = 0; i < items.size(); i++) {
-		//ULONG AlignedSize = 200;
-		//ULONG newEntrySize = sizeof(FILE_ID_BOTH_DIR_INFORMATION) + sizeof(WCHAR) * (wcslen(L"NewMyFolder") + 1);
-		//PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)malloc(newEntrySize);
 		PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)((BYTE*)tempEntry + tempEntry->NextEntryOffset);
 
 		if (newEntry != nullptr) {
@@ -1522,17 +815,14 @@ std::wstring GetMappedDrive(const std::wstring& uncPath) {
 	WCHAR localName[3] = L"A:";  // Start with A:
 	WCHAR remoteName[MAX_PATH];
 	DWORD bufferSize = MAX_PATH;
-
 	// Ensure the UNC path is formatted correctly
 	std::wstring formattedUNC = uncPath;
 	if (formattedUNC.find(L"UNC") == 0) {
-		// Remove "\\?\"
 		formattedUNC = L"\\" + formattedUNC.substr(3);
 	}
 	// Iterate through possible drive letters (A: to Z:)
 	for (char drive = 'A'; drive <= 'Z'; ++drive) {
 		localName[0] = drive;  // Update the drive letter
-
 		// Get the remote name for the current drive letter
 		if (WNetGetConnectionW(localName, remoteName, &bufferSize) == NO_ERROR) {
 			// Compare the UNC path with the remote name
@@ -1576,75 +866,29 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 ) {
 	PVOID	currFile;
 	PVOID	prevFile;
-
-	char buffer[100];
 	
 	// Call the original function
-	NTSTATUS status = Real_NtQueryDirectoryFile(
-		FileHandle,
-		Event,
-		ApcRoutine,
-		ApcContext,
-		IoStatusBlock,
-		FileInformation,
-		Length,
-		FileInformationClass,
-		ReturnSingleEntry,
-		FileName,
-		RestartScan
-	);
+	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
 
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
 		std::wstring filePath = GetFilePathFromHandle(FileHandle); 
-
-		notify(L"Initial name: " + filePath);
 		std::wstring normalizedPath0 = NormalizeFilePath(filePath);
 		std::wstring normalizedPath = normalizedPath0;
 		if (IsUNCPath(normalizedPath0)) {
 			normalizedPath = GetMappedDrive(normalizedPath0) + L"\\";
 		}
-		notify(L"Corrected name: " + normalizedPath); 
 		OutputDebugStringW(normalizedPath0.c_str());
 		if (normalizedPath == GetGlobalDirectoryString() && normalizedPath != L"") {
 			if (CheckPermittedDrive(normalizedPath)) {
-				//if (IsSearchOperation()) OutputDebugStringA("Search is progressing");
-				// get first file
 				currFile = FileInformation;
 				prevFile = NULL;
-				/*
-				std::string stdStrTemp(normalizedPath.begin(), normalizedPath.end());
-				if (!isRootDirectory(stdStrTemp)) {
-					// Iterate to the last file entry
-					for (int i = 0; i < 1; i++) {
-						WCHAR* cfileName = (WCHAR*)getDirEntryFileName(currFile, FileInformationClass);
-						//OutputDebugStringW(cfileName);
-						//sprintf(buffer, "Next Entry Offset : %lu", getNextEntryOffset(currFile, FileInformationClass));
-						//OutputDebugStringA(buffer);
-						//sprintf(buffer, "Address of Current File : %lu", (ULONG)currFile);
-						//OutputDebugStringA(buffer);
-						prevFile = currFile;
-						currFile = (BYTE*)currFile + getNextEntryOffset(currFile, FileInformationClass);
-					}
-				}*/
-				//OutputDebugStringW((WCHAR*)getDirEntryFileName(currFile, FileInformationClass));
-				//sprintf(buffer, "Next Entry Offset : %lu", getNextEntryOffset(currFile, FileInformationClass));
-				//OutputDebugStringA(buffer);
-				//sprintf(buffer, "Address of Current File : %lu", (ULONG)currFile);
-				//OutputDebugStringA(buffer);
-
-				//((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
-				//wcscpy_s(((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileName, wcslen(L"Fake") + 1, L"Fake"); // Adjust size as necessary
-				//((PFILE_ID_BOTH_DIR_INFORMATION)currFile)->FileNameLength = sizeof(L"Fake") - sizeof(WCHAR);			
-
-				//LogUnicodeString(FileName);
 				if (AssignItems(normalizedPath)) {
 					AddEntries(currFile);
 				}
 			}
 		}
 		else SetGlobalDirectoryString(L"");
-
 	}
 
 	return status;
