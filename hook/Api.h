@@ -25,6 +25,7 @@
 
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
+#pragma comment(lib, "Mpr.lib") 
 #define SEARCH_PIPE_NAME "\\\\.\\pipe\\SEARCHDEBUGLOG"
 // Global variables
 HANDLE g_hPipe = NULL;
@@ -1512,6 +1513,37 @@ void AddEntries(PVOID startEntry) {
 	}
 };
 
+// Check if the path starts with "UNC\"
+bool IsUNCPath(const std::wstring& path) {
+	return path.find(L"UNC") == 0;
+}
+
+std::wstring GetMappedDrive(const std::wstring& uncPath) {
+	WCHAR localName[3] = L"A:";  // Start with A:
+	WCHAR remoteName[MAX_PATH];
+	DWORD bufferSize = MAX_PATH;
+
+	// Ensure the UNC path is formatted correctly
+	std::wstring formattedUNC = uncPath;
+	if (formattedUNC.find(L"UNC") == 0) {
+		// Remove "\\?\"
+		formattedUNC = L"\\" + formattedUNC.substr(3);
+	}
+	// Iterate through possible drive letters (A: to Z:)
+	for (char drive = 'A'; drive <= 'Z'; ++drive) {
+		localName[0] = drive;  // Update the drive letter
+
+		// Get the remote name for the current drive letter
+		if (WNetGetConnectionW(localName, remoteName, &bufferSize) == NO_ERROR) {
+			// Compare the UNC path with the remote name
+			if (formattedUNC == remoteName) {
+				return std::wstring(localName);
+			}
+		}
+	}
+	return L"No Mapped Drive";
+}
+
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	HANDLE FileHandle,
@@ -1564,11 +1596,17 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
-		std::wstring filePath = GetFilePathFromHandle(FileHandle);
-		std::wstring normalizedPath = NormalizeFilePath(filePath);
-		OutputDebugStringW(normalizedPath.c_str());
+		std::wstring filePath = GetFilePathFromHandle(FileHandle); 
 
-		if (normalizedPath == GetGlobalDirectoryString()) {
+		notify(L"Initial name: " + filePath);
+		std::wstring normalizedPath0 = NormalizeFilePath(filePath);
+		std::wstring normalizedPath = normalizedPath0;
+		if (IsUNCPath(normalizedPath0)) {
+			normalizedPath = GetMappedDrive(normalizedPath0) + L"\\";
+		}
+		notify(L"Corrected name: " + normalizedPath); 
+		OutputDebugStringW(normalizedPath0.c_str());
+		if (normalizedPath == GetGlobalDirectoryString() && normalizedPath != L"") {
 			if (CheckPermittedDrive(normalizedPath)) {
 				//if (IsSearchOperation()) OutputDebugStringA("Search is progressing");
 				// get first file
