@@ -485,7 +485,7 @@ DWORD WINAPI CreatePipe(LPVOID lpParam)
 		Sleep(1000);
 	}
 	OutputDebugStringA("Pipe is created");
-} 
+}
 
 std::string GetFullPathFromHandle(HANDLE hFile) {
 	// Check if the handle is valid
@@ -521,7 +521,7 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		std::wstring searchword = extractCrumbValue(input);
 		SetGlobalSearchWord(searchword);
 		if (searchword.length() > 0)
-		{			
+		{
 			std::wstring searchpath = extractLocation(input);
 			SetGlobalDirectoryString(searchpath);
 			const std::wstring prefix = L"C:\\";
@@ -695,7 +695,7 @@ void setNextEntryOffset
 BOOL CheckPermittedDrive(const std::wstring& directory) {
 
 	std::vector<std::string> permittedDrives;
-	
+
 	std::ifstream configFile("C:\\SearchConfig\\config.json");
 	if (!configFile.is_open()) {
 		OutputDebugStringA("Error opening config.json");
@@ -753,7 +753,7 @@ BOOL AssignItems(const std::wstring& directory) {
 			std::wstring wideName = std::wstring(name.begin(), name.end());
 			item.Name = wideName; // Assign as PCWSTR
 			item.Type = (entry["Type"].get<std::string>() == "File") ? 0 : 1;
-			
+
 			items.push_back(item);
 		}
 	}
@@ -773,9 +773,9 @@ void AddEntries(PVOID startEntry) {
 	const ULONG FixedSize = offsetof(FILE_ID_BOTH_DIR_INFORMATION, FileName);
 	// Total size before alignment
 	PFILE_ID_BOTH_DIR_INFORMATION tempEntry = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
-	
+
 	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = ALIGN_UP_BY(FixedSize + ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength, sizeof(LONGLONG));
-	
+
 	for (int i = 0; i < items.size(); i++) {
 		PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)((BYTE*)tempEntry + tempEntry->NextEntryOffset);
 
@@ -783,10 +783,10 @@ void AddEntries(PVOID startEntry) {
 			// Fill in the new entry's data
 			newEntry->FileNameLength = (wcslen(items.at(i).Name.c_str())) * sizeof(wchar_t);
 			wcscpy_s(newEntry->FileName, items.at(i).Name.length() + 1, items.at(i).Name.c_str()); // Copy string
-			if (i != items.size()-1) newEntry->NextEntryOffset = ALIGN_UP_BY(FixedSize + newEntry->FileNameLength, sizeof(LONGLONG)); // This will be the last entry
-			if (i == items.size()-1) newEntry->NextEntryOffset = NO_MORE_ENTRIES;
+			if (i != items.size() - 1) newEntry->NextEntryOffset = ALIGN_UP_BY(FixedSize + newEntry->FileNameLength, sizeof(LONGLONG)); // This will be the last entry
+			if (i == items.size() - 1) newEntry->NextEntryOffset = NO_MORE_ENTRIES;
 			if (items.at(i).Type == 1) newEntry->FileAttributes = FILE_ATTRIBUTE_DIRECTORY; // Set desired attributes
-			if(items.at(i).Type == 0) newEntry->FileAttributes = FILE_ATTRIBUTE_NORMAL; // Set desired attributes
+			if (items.at(i).Type == 0) newEntry->FileAttributes = FILE_ATTRIBUTE_NORMAL; // Set desired attributes
 
 			//newEntry->FileIndex = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileIndex; // Set file index appropriately
 			//newEntry->CreationTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->CreationTime.QuadPart; // Set creation time if needed
@@ -826,6 +826,7 @@ std::wstring GetMappedDrive(const std::wstring& uncPath) {
 		// Get the remote name for the current drive letter
 		if (WNetGetConnectionW(localName, remoteName, &bufferSize) == NO_ERROR) {
 			// Compare the UNC path with the remote name
+
 			if (formattedUNC == remoteName) {
 				return std::wstring(localName);
 			}
@@ -833,6 +834,56 @@ std::wstring GetMappedDrive(const std::wstring& uncPath) {
 	}
 	return L"No Mapped Drive";
 }
+
+std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
+
+	for (wchar_t drive = L'A'; drive <= L'Z'; ++drive) {
+		// Create the local drive letter (e.g., "M:")
+		std::wstring localDrive = std::wstring(1, drive) + L":";
+
+		DWORD bufferSize = 0;
+
+		// First call to determine the required buffer size
+		DWORD result = WNetGetUniversalNameW(
+			localDrive.c_str(),
+			UNIVERSAL_NAME_INFO_LEVEL,
+			NULL,
+			&bufferSize
+		);
+
+		if (result == ERROR_MORE_DATA) {
+			// Allocate buffer for UNIVERSAL_NAME_INFO
+			auto buffer = new BYTE[bufferSize];
+
+			// Second call to retrieve the UNC path
+			result = WNetGetUniversalNameW(
+				localDrive.c_str(),
+				UNIVERSAL_NAME_INFO_LEVEL,
+				buffer,
+				&bufferSize
+			);
+
+			if (result == NO_ERROR) {
+				// Extract the UNC path
+				UNIVERSAL_NAME_INFOW* info = (UNIVERSAL_NAME_INFOW*)buffer;
+
+				// Compare with the target UNC path
+				if (_wcsicmp(info->lpUniversalName, uncPath.c_str()) == 0) {
+					// Match found
+					delete[] buffer;
+					return localDrive.substr(0, 2); // Return the drive letter (e.g., "M:")
+				}
+			}
+
+			// Clean up the buffer
+			delete[] buffer;
+		}
+	}
+
+	// If no match is found
+	return L"";
+}
+
 
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
@@ -866,19 +917,26 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 ) {
 	PVOID	currFile;
 	PVOID	prevFile;
-	
+
 	// Call the original function
 	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
 
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
-		std::wstring filePath = GetFilePathFromHandle(FileHandle); 
+		std::wstring filePath = GetFilePathFromHandle(FileHandle);
 		std::wstring normalizedPath0 = NormalizeFilePath(filePath);
 		std::wstring normalizedPath = normalizedPath0;
 		if (IsUNCPath(normalizedPath0)) {
-			normalizedPath = GetMappedDrive(normalizedPath0) + L"\\";
+			normalizedPath0.pop_back();
+			std::wstring formattedUNC = normalizedPath0;
+			if (formattedUNC.find(L"UNC") == 0) {
+				formattedUNC = L"\\" + formattedUNC.substr(3);
+			}
+			//OutputDebugStringW(formattedUNC.c_str());
+			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
 		}
-		OutputDebugStringW(normalizedPath0.c_str());
+		//OutputDebugStringW((L"First normalized path : " + normalizedPath0).c_str());
+		//OutputDebugStringW((L"Second normalized path : " + normalizedPath).c_str());
 		if (normalizedPath == GetGlobalDirectoryString() && normalizedPath != L"") {
 			if (CheckPermittedDrive(normalizedPath)) {
 				currFile = FileInformation;
