@@ -19,6 +19,8 @@
 #include <shobjidl.h>  // for IKnownFolder
 #include <comdef.h>     // for CComPtr
 #include <shlobj_core.h>
+#include <mutex>
+#include "SearchDirectoryValueManager.h"
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "Mpr.lib")
@@ -315,15 +317,10 @@ const WCHAR newPrefix[] = L"yess";
 HKEY g_searchkey = NULL;
 wchar_t g_pszPath[MAX_PATH] = { 0 };
 HANDLE g_hPipe = NULL;
-std::wstring g_strSearchDirectory = L"";
+std::mutex g_directoryMutex;
 std::wstring g_strSearchWord = L"";
 
-void SetGlobalDirectoryString(const std::wstring& newValue) {
-	g_strSearchDirectory = newValue;
-}
-std::wstring GetGlobalDirectoryString() {
-	return g_strSearchDirectory;
-}
+
 void SetGlobalSearchWord(const std::wstring& newValue) {
 	g_strSearchWord = newValue;
 }
@@ -508,10 +505,12 @@ std::string GetFullPathFromHandle(HANDLE hFile) {
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
 SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
 
+std::wstring searchedPath = std::wstring(L"");
 HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl) {
 	// Call the original function
 	HRESULT result = TrueSHGetIDListFromObject(punk, ppidl);
-
+	
+	OutputDebugStringA("HookSHGetIDListFromObject is called");
 	// Check if the function succeeded and log the PIDL if available
 	if (SUCCEEDED(result) && ppidl && *ppidl) {
 		CComHeapPtr<wchar_t> pSearch;
@@ -520,10 +519,13 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		std::wstring input = static_cast<LPWSTR>(pSearch);
 		std::wstring searchword = extractCrumbValue(input);
 		SetGlobalSearchWord(searchword);
+		notify(L"Search Word: " + searchword);
+
 		if (searchword.length() > 0)
 		{
 			std::wstring searchpath = extractLocation(input);
-			SetGlobalDirectoryString(searchpath);
+			searchedPath = searchpath;
+			SearchDirectoryValueManager::GetInstance().SetDirectory(searchpath);
 			const std::wstring prefix = L"C:\\";
 			if (searchpath.compare(0, prefix.length(), prefix) == 0)
 			{
@@ -534,12 +536,23 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 				*ppidl = newPidl;
 			}
 		}
+		else {
+			//SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+			if (searchedPath != L"") {
+				//notify(L"Searched path is " + searchedPath);
+				//PIDLIST_ABSOLUTE newPidl = nullptr;
+				//HRESULT hr = SHParseDisplayName(searchedPath.c_str(), nullptr, &newPidl, 0, nullptr);
+				//*ppidl = newPidl;
+				//searchedPath = L"";
+			}
+		}
+		//notify(L"Search path: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
 
 		//check if this is search context. some keywords are not showed
 		std::wstring specialsearchpath = extractSearchLocation(input);
 		if (specialsearchpath.length() > 0)
 		{
-			notify(L"speical context &" + specialsearchpath);
+		//	notify(L"speical context &" + specialsearchpath);
 			const std::wstring prefix = L"C:\\";
 			if (specialsearchpath.compare(0, prefix.length(), prefix) == 0)
 			{
@@ -692,10 +705,9 @@ void setNextEntryOffset
 	}
 }
 
-BOOL CheckPermittedDrive(const std::wstring& directory) {
-
-	std::vector<std::string> permittedDrives;
-
+std::vector<std::string> permittedDrives;
+nlohmann::json resultJson;
+BOOL LoadConfigInformation() {
 	std::ifstream configFile("C:\\SearchConfig\\config.json");
 	if (!configFile.is_open()) {
 		OutputDebugStringA("Error opening config.json");
@@ -704,9 +716,21 @@ BOOL CheckPermittedDrive(const std::wstring& directory) {
 	nlohmann::json configJson;
 	configFile >> configJson;
 	configFile.close();
-
 	// Extract permitted drives
 	permittedDrives = configJson["PermittedDrives"].get<std::vector<std::string>>();
+
+	std::ifstream resultFile("C:\\SearchConfig\\result.json");
+	if (!resultFile.is_open()) {
+		OutputDebugStringA("Error opening result.json");
+		return FALSE;
+	}
+	
+	resultFile >> resultJson;
+	resultFile.close();
+	return TRUE;
+}
+
+BOOL CheckPermittedDrive(const std::wstring& directory) {
 	// Extract drive letter from the directory path
 	std::string directoryStr(directory.begin(), directory.end());
 	//std::string driveLetter = directoryStr.substr(0, directoryStr.find(':'));
@@ -726,14 +750,6 @@ bool isCommonDirectory(const std::string& path) {
 
 BOOL AssignItems(const std::wstring& directory) {
 	items.clear();
-	std::ifstream resultFile("C:\\SearchConfig\\result.json");
-	if (!resultFile.is_open()) {
-		OutputDebugStringA("Error opening result.json");
-		return FALSE;
-	}
-	nlohmann::json resultJson;
-	resultFile >> resultJson;
-	resultFile.close();
 
 	std::string directoryStr(directory.begin(), directory.end());
 
@@ -920,7 +936,10 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 
 	// Call the original function
 	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
-
+	//OutputDebugStringA("Hooked_NtQueryDirectoryFile is called");
+	char buff[200];
+	sprintf(buff, "FileInformationClass value: %d", FileInformationClass);
+	OutputDebugStringA(buff);
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
 		std::wstring filePath = GetFilePathFromHandle(FileHandle);
@@ -935,9 +954,10 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 			//OutputDebugStringW(formattedUNC.c_str());
 			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
 		}
-		//OutputDebugStringW((L"First normalized path : " + normalizedPath0).c_str());
-		//OutputDebugStringW((L"Second normalized path : " + normalizedPath).c_str());
-		if (normalizedPath == GetGlobalDirectoryString() && normalizedPath != L"") {
+		notify(L"Normalized path: " + normalizedPath);
+		notify(L"Searching directory: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
+		//notify(L"Searching directory: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
+		if (normalizedPath == SearchDirectoryValueManager::GetInstance().GetDirectory()) {
 			if (CheckPermittedDrive(normalizedPath)) {
 				currFile = FileInformation;
 				prevFile = NULL;
@@ -946,7 +966,11 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 				}
 			}
 		}
-		else SetGlobalDirectoryString(L"");
+		else SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+	}
+
+	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
+		SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 	}
 
 	return status;
