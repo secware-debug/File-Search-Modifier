@@ -20,6 +20,8 @@
 #include <comdef.h>     // for CComPtr
 #include <shlobj_core.h>
 #include <mutex>
+#include <shlobj.h>
+
 #include "SearchDirectoryValueManager.h"
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
@@ -318,7 +320,7 @@ HKEY g_searchkey = NULL;
 wchar_t g_pszPath[MAX_PATH] = { 0 };
 HANDLE g_hPipe = NULL;
 std::mutex g_directoryMutex;
-std::wstring g_strSearchWord = L"";
+std::wstring g_strSearchWord = L"ie82923kjbv820ejw";
 
 
 void SetGlobalSearchWord(const std::wstring& newValue) {
@@ -502,15 +504,35 @@ std::string GetFullPathFromHandle(HANDLE hFile) {
 	return std::string(buffer);
 }
 
+bool IsSearchQueryString(const std::wstring& str) {
+	return str.find(L"search-ms") != std::wstring::npos;
+}
+
+std::wstring GetSearchLocation(const std::wstring& str) {
+	std::wstring startMarker = L"&crumb=location:";
+	std::size_t start = str.find(startMarker);
+	if (start == std::wstring::npos) {
+		return L""; // Return empty string if the marker is not found
+	}
+
+	start += startMarker.length(); // Move past the marker
+	std::size_t end = str.find(L"%", start);
+	if (end == std::wstring::npos) {
+		return L""; // Return empty string if '%' is not found after the marker
+	}
+
+	return str.substr(start, end - start); // Extract the substring
+}
+
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
 SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
 
-std::wstring searchedPath = std::wstring(L"");
 HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl) {
 	// Call the original function
 	HRESULT result = TrueSHGetIDListFromObject(punk, ppidl);
+
+	static int cnt = 0;
 	
-	OutputDebugStringA("HookSHGetIDListFromObject is called");
 	// Check if the function succeeded and log the PIDL if available
 	if (SUCCEEDED(result) && ppidl && *ppidl) {
 		CComHeapPtr<wchar_t> pSearch;
@@ -518,14 +540,27 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		::SHGetNameFromIDList(*ppidl, SIGDN_PARENTRELATIVEFORADDRESSBAR, &pSearch);
 		std::wstring input = static_cast<LPWSTR>(pSearch);
 		std::wstring searchword = extractCrumbValue(input);
-		SetGlobalSearchWord(searchword);
-		notify(L"Search Word: " + searchword);
-
-		if (searchword.length() > 0)
-		{
+		notify(L"search term: " + searchword);
+		if (IsSearchQueryString(input)) {
+			cnt++;
+		}
+		else {
+			cnt--;
+		}
+		if (cnt == 3) {
+			SearchDirectoryValueManager::GetInstance().SetDirectory(GetSearchLocation(input) + L":\\");
+			cnt = 0;
+		}
+		else if (cnt == -3) {
+			SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+			cnt = 0;
+		}
+		
+		//notify(SearchDirectoryValueManager::GetInstance().GetDirectory() + L"cnt: " + std::to_wstring(cnt));
+		if (searchword.length() > 0){
 			std::wstring searchpath = extractLocation(input);
-			searchedPath = searchpath;
-			SearchDirectoryValueManager::GetInstance().SetDirectory(searchpath);
+			notify(L"search path: " + searchpath);
+			
 			const std::wstring prefix = L"C:\\";
 			if (searchpath.compare(0, prefix.length(), prefix) == 0)
 			{
@@ -536,17 +571,6 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 				*ppidl = newPidl;
 			}
 		}
-		else {
-			//SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
-			if (searchedPath != L"") {
-				//notify(L"Searched path is " + searchedPath);
-				//PIDLIST_ABSOLUTE newPidl = nullptr;
-				//HRESULT hr = SHParseDisplayName(searchedPath.c_str(), nullptr, &newPidl, 0, nullptr);
-				//*ppidl = newPidl;
-				//searchedPath = L"";
-			}
-		}
-		//notify(L"Search path: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
 
 		//check if this is search context. some keywords are not showed
 		std::wstring specialsearchpath = extractSearchLocation(input);
@@ -743,11 +767,6 @@ bool isRootDirectory(const std::string& path) {
 	return (path.size() == 3 && path[1] == ':' && path[2] == '\\');
 }
 
-bool isCommonDirectory(const std::string& path) {
-	// Check if the path is a valid directory (not a root) and ends with a backslash
-	return (path.size() > 3 && path[1] == ':' && path[2] == '\\' && path.back() == '\\');
-}
-
 BOOL AssignItems(const std::wstring& directory) {
 	items.clear();
 
@@ -800,22 +819,20 @@ void AddEntries(PVOID startEntry) {
 			newEntry->FileNameLength = (wcslen(items.at(i).Name.c_str())) * sizeof(wchar_t);
 			wcscpy_s(newEntry->FileName, items.at(i).Name.length() + 1, items.at(i).Name.c_str()); // Copy string
 			if (i != items.size() - 1) newEntry->NextEntryOffset = ALIGN_UP_BY(FixedSize + newEntry->FileNameLength, sizeof(LONGLONG)); // This will be the last entry
-			if (i == items.size() - 1) newEntry->NextEntryOffset = NO_MORE_ENTRIES;
+			else newEntry->NextEntryOffset = NO_MORE_ENTRIES;
 			if (items.at(i).Type == 1) newEntry->FileAttributes = FILE_ATTRIBUTE_DIRECTORY; // Set desired attributes
-			if (items.at(i).Type == 0) newEntry->FileAttributes = FILE_ATTRIBUTE_NORMAL; // Set desired attributes
+			else newEntry->FileAttributes = FILE_ATTRIBUTE_NORMAL; // Set desired attributes
 
-			//newEntry->FileIndex = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileIndex; // Set file index appropriately
-			//newEntry->CreationTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->CreationTime.QuadPart; // Set creation time if needed
-			//newEntry->LastAccessTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastAccessTime.QuadPart; // Set last access time if needed
-			//newEntry->LastWriteTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastWriteTime.QuadPart; // Set last write time if needed
-			//newEntry->ChangeTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->ChangeTime.QuadPart; // Set change time if needed
-			//newEntry->EndOfFile.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EndOfFile.QuadPart; // Set end of file size if needed
-			//newEntry->AllocationSize.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->AllocationSize.QuadPart; // Set allocation size if needed
-			//newEntry->FileId.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileId.QuadPart; // Set file ID if needed
-			//newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EaSize; // Set file ID if needed
-
+			newEntry->FileIndex = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileIndex; // Set file index appropriately
+			newEntry->CreationTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->CreationTime.QuadPart; // Set creation time if needed
+			newEntry->LastAccessTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastAccessTime.QuadPart; // Set last access time if needed
+			newEntry->LastWriteTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->LastWriteTime.QuadPart; // Set last write time if needed
+			newEntry->ChangeTime.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->ChangeTime.QuadPart; // Set change time if needed
+			newEntry->EndOfFile.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EndOfFile.QuadPart; // Set end of file size if needed
+			newEntry->AllocationSize.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->AllocationSize.QuadPart; // Set allocation size if needed
+			newEntry->FileId.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileId.QuadPart; // Set file ID if needed
+			newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EaSize; // Set file ID if needed
 			newEntry->ShortNameLength = 0;
-
 		}
 		tempEntry = newEntry;
 		//free(newEntry); // Don't forget to free allocated memory
@@ -826,7 +843,7 @@ void AddEntries(PVOID startEntry) {
 bool IsUNCPath(const std::wstring& path) {
 	return path.find(L"UNC") == 0;
 }
-
+/*
 std::wstring GetMappedDrive(const std::wstring& uncPath) {
 	WCHAR localName[3] = L"A:";  // Start with A:
 	WCHAR remoteName[MAX_PATH];
@@ -850,6 +867,7 @@ std::wstring GetMappedDrive(const std::wstring& uncPath) {
 	}
 	return L"No Mapped Drive";
 }
+*/
 
 std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 
@@ -900,7 +918,6 @@ std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 	return L"";
 }
 
-
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	HANDLE FileHandle,
@@ -933,13 +950,7 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 ) {
 	PVOID	currFile;
 	PVOID	prevFile;
-
-	// Call the original function
 	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
-	//OutputDebugStringA("Hooked_NtQueryDirectoryFile is called");
-	char buff[200];
-	sprintf(buff, "FileInformationClass value: %d", FileInformationClass);
-	OutputDebugStringA(buff);
 	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 		// Query the file path associated with the FileHandle
 		std::wstring filePath = GetFilePathFromHandle(FileHandle);
@@ -952,12 +963,10 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 				formattedUNC = L"\\" + formattedUNC.substr(3);
 			}
 			//OutputDebugStringW(formattedUNC.c_str());
-			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
+			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\"; 
 		}
-		notify(L"Normalized path: " + normalizedPath);
-		notify(L"Searching directory: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
-		//notify(L"Searching directory: " + SearchDirectoryValueManager::GetInstance().GetDirectory());
 		if (normalizedPath == SearchDirectoryValueManager::GetInstance().GetDirectory()) {
+
 			if (CheckPermittedDrive(normalizedPath)) {
 				currFile = FileInformation;
 				prevFile = NULL;
@@ -966,11 +975,6 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 				}
 			}
 		}
-		else SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
-	}
-
-	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
-		SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 	}
 
 	return status;
