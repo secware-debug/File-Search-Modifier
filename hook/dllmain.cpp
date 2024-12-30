@@ -4,6 +4,8 @@
 #include "detours.h"
 #include "Api.h"
 
+#pragma comment(lib, "./lib/x64/detours.lib")
+
 static BOOL InstallHook(LPCSTR dll, LPCSTR function, LPVOID* originalFunction, LPVOID hookedFunction)
 {
 	HMODULE module = GetModuleHandleA(dll);

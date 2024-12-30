@@ -1,6 +1,7 @@
 # Ignore the Release directories
 Release/
 MessageLog/Release/
+MessageLog/x64/
 demo/Release/
 
 # Ignore specific directories

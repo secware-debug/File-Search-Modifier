@@ -21,6 +21,7 @@
 #include <shlobj_core.h>
 #include <mutex>
 #include <shlobj.h>
+#include <locale>
 
 #include "SearchDirectoryValueManager.h"
 #pragma comment(lib, "Shlwapi.lib")
@@ -470,7 +471,7 @@ std::wstring extractSearchLocation(const std::wstring& input) {
 DWORD WINAPI CreatePipe(LPVOID lpParam)
 {
 	//create pipe
-	g_hPipe = CreateNamedPipe(SEARCH_PIPE_NAME, PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
+	g_hPipe = CreateNamedPipeA(SEARCH_PIPE_NAME, PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
 		PIPE_UNLIMITED_INSTANCES, 0, 0, 0, NULL);
 	if (g_hPipe == INVALID_HANDLE_VALUE) {
 		//printf("Failed to create the keyboard named pipe.\n");
@@ -516,12 +517,12 @@ std::wstring GetSearchLocation(const std::wstring& str) {
 	}
 
 	start += startMarker.length(); // Move past the marker
-	std::size_t end = str.find(L"%", start);
-	if (end == std::wstring::npos) {
-		return L""; // Return empty string if '%' is not found after the marker
-	}
+	// std::size_t end = str.find(L"%", start);
+	// if (end == std::wstring::npos) {
+	//	return L""; // Return empty string if '%' is not found after the marker
+	// }
 
-	return str.substr(start, end - start); // Extract the substring
+	return str.substr(start, std::wstring::npos); // Extract the substring
 }
 
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
@@ -530,8 +531,6 @@ SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
 HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl) {
 	// Call the original function
 	HRESULT result = TrueSHGetIDListFromObject(punk, ppidl);
-
-	static int cnt = 0;
 	
 	// Check if the function succeeded and log the PIDL if available
 	if (SUCCEEDED(result) && ppidl && *ppidl) {
@@ -542,48 +541,36 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		std::wstring searchword = extractCrumbValue(input);
 		notify(L"search term: " + searchword);
 		if (IsSearchQueryString(input)) {
-			cnt++;
+			SearchDirectoryValueManager::GetInstance().SetDirectory(extractLocation(input));
 		}
-		else {
-			cnt--;
-		}
-		if (cnt == 3) {
-			SearchDirectoryValueManager::GetInstance().SetDirectory(GetSearchLocation(input) + L":\\");
-			cnt = 0;
-		}
-		else if (cnt == -3) {
-			SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
-			cnt = 0;
-		}
-		
-		//notify(SearchDirectoryValueManager::GetInstance().GetDirectory() + L"cnt: " + std::to_wstring(cnt));
+	
 		if (searchword.length() > 0){
 			std::wstring searchpath = extractLocation(input);
 			notify(L"search path: " + searchpath);
 			
-			const std::wstring prefix = L"C:\\";
-			if (searchpath.compare(0, prefix.length(), prefix) == 0)
-			{
-				//ppidl = NULL;
-				//return E_UNEXPECTED;
-				PIDLIST_ABSOLUTE newPidl = nullptr;
-				HRESULT hr = SHParseDisplayName(L"C:\\", nullptr, &newPidl, 0, nullptr);
-				*ppidl = newPidl;
-			}
+			//const std::wstring prefix = L"C:\\";
+			//if (searchpath.compare(0, prefix.length(), prefix) == 0)
+			//{
+			//	//ppidl = NULL;
+			//	//return E_UNEXPECTED;
+			//	PIDLIST_ABSOLUTE newPidl = nullptr;
+			//	HRESULT hr = SHParseDisplayName(L"C:\\", nullptr, &newPidl, 0, nullptr);
+			//	*ppidl = newPidl;
+			//}
 		}
 
 		//check if this is search context. some keywords are not showed
-		std::wstring specialsearchpath = extractSearchLocation(input);
+		/*std::wstring specialsearchpath = extractSearchLocation(input);
 		if (specialsearchpath.length() > 0)
 		{
-		//	notify(L"speical context &" + specialsearchpath);
+			notify(L"speical context &" + specialsearchpath);
 			const std::wstring prefix = L"C:\\";
 			if (specialsearchpath.compare(0, prefix.length(), prefix) == 0)
 			{
 				ppidl = NULL;
 				return E_UNEXPECTED;
 			}
-		}
+		}*/
 	}
 	else {
 		OutputDebugStringA("SHGetIDListFromObject failed or PIDL not obtained.\n");
@@ -776,11 +763,7 @@ BOOL AssignItems(const std::wstring& directory) {
 		std::string location = entry["Location"].get<std::string>();
 
 		// Check if the location is under the given directory
-		std::string searchterm;
-		if (isRootDirectory(directoryStr))
-			searchterm = directoryStr;
-		else
-			searchterm = directoryStr + "\\";
+		std::string searchterm = directoryStr + "\\";
 		if (location.find(searchterm) == 0) {
 			RESULT_ITEM item;
 			size_t pos = location.find_last_of('\\');
@@ -792,6 +775,8 @@ BOOL AssignItems(const std::wstring& directory) {
 			items.push_back(item);
 		}
 	}
+
+	//OutputDebugStringA(("assigned items' size: " + std::to_string(items.size())).c_str());
 
 	return !items.empty();
 }
@@ -810,7 +795,9 @@ void AddEntries(PVOID startEntry) {
 	PFILE_ID_BOTH_DIR_INFORMATION tempEntry = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
 
 	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = ALIGN_UP_BY(FixedSize + ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength, sizeof(LONGLONG));
-
+	
+	int tempnt = 0;
+	
 	for (int i = 0; i < items.size(); i++) {
 		PFILE_ID_BOTH_DIR_INFORMATION newEntry = (PFILE_ID_BOTH_DIR_INFORMATION)((BYTE*)tempEntry + tempEntry->NextEntryOffset);
 
@@ -831,12 +818,16 @@ void AddEntries(PVOID startEntry) {
 			newEntry->EndOfFile.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EndOfFile.QuadPart; // Set end of file size if needed
 			newEntry->AllocationSize.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->AllocationSize.QuadPart; // Set allocation size if needed
 			newEntry->FileId.QuadPart = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileId.QuadPart; // Set file ID if needed
-			newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EaSize; // Set file ID if needed
+			newEntry->EaSize = ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->EaSize; // Set file ID if needed 
 			newEntry->ShortNameLength = 0;
 		}
 		tempEntry = newEntry;
+		tempnt++;
 		//free(newEntry); // Don't forget to free allocated memory
 	}
+	
+	//OutputDebugStringA(("added items' size: " + std::to_string(tempnt)).c_str());
+	tempnt = 0;
 };
 
 // Check if the path starts with "UNC\"
@@ -886,6 +877,7 @@ std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 		);
 
 		if (result == ERROR_MORE_DATA) {
+			//OutputDebugStringA("ERROR_MORE_DATA");
 			// Allocate buffer for UNIVERSAL_NAME_INFO
 			auto buffer = new BYTE[bufferSize];
 
@@ -900,7 +892,8 @@ std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 			if (result == NO_ERROR) {
 				// Extract the UNC path
 				UNIVERSAL_NAME_INFOW* info = (UNIVERSAL_NAME_INFOW*)buffer;
-
+				//OutputDebugStringA("lpuniersalname");
+				//OutputDebugStringW(info->lpUniversalName);
 				// Compare with the target UNC path
 				if (_wcsicmp(info->lpUniversalName, uncPath.c_str()) == 0) {
 					// Match found
@@ -908,7 +901,7 @@ std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 					return localDrive.substr(0, 2); // Return the drive letter (e.g., "M:")
 				}
 			}
-
+			 
 			// Clean up the buffer
 			delete[] buffer;
 		}
@@ -916,6 +909,127 @@ std::wstring GetLocalDriveFromUNC(const std::wstring& uncPath) {
 
 	// If no match is found
 	return L"";
+}
+
+std::wstring GetDrivePath(const std::wstring& directoryPath) {
+	// Check if the path is valid and has at least 2 characters (e.g., "E:")
+	if (directoryPath.length() < 2) {
+		return L""; // Return an empty string if the path is invalid
+	}
+
+	// Check if the first character is a drive letter followed by ':'
+	if (directoryPath[1] == L':') {
+		return directoryPath.substr(0, 2); // Return the drive path (e.g., "E:")
+	}
+
+	return L""; // Return an empty string if it's not a valid drive path
+}
+
+void DebugLog(const std::string& message)
+{
+	OutputDebugStringA(message.c_str());
+}
+
+void NavigateToFolder(const std::wstring& folderPath)
+{
+	// Initialize COM
+	HRESULT hr = CoInitialize(NULL);
+	if (SUCCEEDED(hr))
+	{
+		IShellWindows* pShellWindows = nullptr;
+
+		// Get the IShellWindows interface
+		hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IShellWindows, (void**)&pShellWindows);
+		if (SUCCEEDED(hr) && pShellWindows)
+		{
+			IDispatch* pDispatch = nullptr;
+			VARIANT vtEmpty;
+			VariantInit(&vtEmpty);
+
+			bool foundWindow = false;
+
+			// Iterate through all shell windows
+			long count = 0;
+			hr = pShellWindows->get_Count(&count);
+			if (SUCCEEDED(hr))
+			{
+				for (long i = 0; i < count; ++i)
+				{
+					VARIANT index;
+					VariantInit(&index);
+					index.vt = VT_I4;
+					index.lVal = i;
+
+					hr = pShellWindows->Item(index, &pDispatch);
+					if (SUCCEEDED(hr) && pDispatch)
+					{
+						IWebBrowser2* pBrowser = nullptr;
+						hr = pDispatch->QueryInterface(IID_IWebBrowser2, (void**)&pBrowser);
+						if (SUCCEEDED(hr) && pBrowser)
+						{
+							BSTR locationName;
+							hr = pBrowser->get_LocationName(&locationName);
+							if (SUCCEEDED(hr) && locationName)
+							{
+								// Optionally check the current location name to identify the desired window
+								foundWindow = true;
+
+								VARIANT vtFolder;
+								VariantInit(&vtFolder);
+								vtFolder.vt = VT_BSTR;
+								vtFolder.bstrVal = SysAllocString(folderPath.c_str());
+
+								// Navigate to the folder
+								hr = pBrowser->Navigate2(&vtFolder, &vtEmpty, &vtEmpty, &vtEmpty, &vtEmpty);
+								if (SUCCEEDED(hr))
+								{
+									DebugLog("Successfully navigated to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
+								}
+								else
+								{
+									DebugLog("Failed to navigate to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
+								}
+
+								VariantClear(&vtFolder);
+								SysFreeString(locationName);
+							}
+
+							pBrowser->Release();
+						}
+						pDispatch->Release();
+					}
+
+					if (foundWindow)
+						break;
+				}
+			}
+
+			if (!foundWindow)
+			{
+				DebugLog("No suitable Explorer window found.\n");
+			}
+
+			pShellWindows->Release();
+		}
+		else
+		{
+			DebugLog("Failed to get ShellWindows interface.\n");
+		}
+
+		CoUninitialize();
+	}
+	else
+	{
+		DebugLog("Failed to initialize COM.\n");
+	}
+}
+
+std::wstring toLower(const std::wstring& input) {
+	std::wstring result = input;
+	std::transform(result.begin(), result.end(), result.begin(), [](wchar_t c) {
+		return ::towlower(c); // Use ::towlower for wide characters
+		});
+	return result;
 }
 
 // Function pointer for the original NtQueryDirectoryFile
@@ -949,31 +1063,51 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 	BOOLEAN RestartScan
 ) {
 	PVOID	currFile;
-	PVOID	prevFile;
+	
 	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
-	if (NT_SUCCESS(status) && FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
+
+	if (NT_SUCCESS(status)) {
 		// Query the file path associated with the FileHandle
 		std::wstring filePath = GetFilePathFromHandle(FileHandle);
 		std::wstring normalizedPath0 = NormalizeFilePath(filePath);
 		std::wstring normalizedPath = normalizedPath0;
 		if (IsUNCPath(normalizedPath0)) {
+			//OutputDebugStringA("normalpat0");
+			//OutputDebugStringW(normalizedPath0.c_str());
 			normalizedPath0.pop_back();
 			std::wstring formattedUNC = normalizedPath0;
 			if (formattedUNC.find(L"UNC") == 0) {
 				formattedUNC = L"\\" + formattedUNC.substr(3);
 			}
+			//OutputDebugStringA("formatedun");
 			//OutputDebugStringW(formattedUNC.c_str());
-			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\"; 
+			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
 		}
-		if (normalizedPath == SearchDirectoryValueManager::GetInstance().GetDirectory()) {
 
-			if (CheckPermittedDrive(normalizedPath)) {
-				currFile = FileInformation;
-				prevFile = NULL;
-				if (AssignItems(normalizedPath)) {
-					AddEntries(currFile);
+		if (FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
+
+			if (SearchDirectoryValueManager::GetInstance().GetDirectory() != L"") {
+
+				std::wstring drivePath = GetDrivePath(normalizedPath);
+
+				if (normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") != std::wstring::npos)
+					return status;
+				else if (toLower(normalizedPath).find(toLower(L"$RECYCLE.BIN")) != std::wstring::npos) {
+					((PFILE_ID_BOTH_DIR_INFORMATION)FileInformation)->NextEntryOffset = NO_MORE_ENTRIES;
+					return status;
+				}
+				else if (CheckPermittedDrive(drivePath)) {
+					currFile = FileInformation;
+					if (AssignItems(drivePath)) {
+						AddEntries(currFile);
+					}
 				}
 			}
+		}
+		else if (FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
+			if(normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") == std::wstring::npos)
+				NavigateToFolder(normalizedPath);
+			SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 		}
 	}
 
