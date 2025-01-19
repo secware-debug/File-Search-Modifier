@@ -27,6 +27,7 @@ void mainhook() {
     InstallHook("Shell32.dll", "SHGetIDListFromObject", (LPVOID*)&TrueSHGetIDListFromObject, HookSHGetIDListFromObject);
     InstallHook("ntdll.dll", "NtQueryDirectoryFile", (LPVOID*)&Real_NtQueryDirectoryFile, Hooked_NtQueryDirectoryFile);
 
+
     DetourTransactionCommit();
 }
 

@@ -525,6 +525,15 @@ std::wstring GetSearchLocation(const std::wstring& str) {
 	return str.substr(start, std::wstring::npos); // Extract the substring
 }
 
+bool endsWithColon(const std::wstring& str) {
+	if (str.size() < 1) {
+		return false; // If the string is empty, it can't end with ':'
+	}
+	return str[str.size() - 1] == L':';
+}
+
+std::wstring g_InputStr;
+int g_cntLocationModify = 0;
 typedef HRESULT(WINAPI* SHGetIDListFromObject_t)(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl);
 SHGetIDListFromObject_t TrueSHGetIDListFromObject = nullptr;
 
@@ -538,10 +547,16 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		CComHeapPtr<wchar_t> pPath;
 		::SHGetNameFromIDList(*ppidl, SIGDN_PARENTRELATIVEFORADDRESSBAR, &pSearch);
 		std::wstring input = static_cast<LPWSTR>(pSearch);
+		g_InputStr = input;
+		//OutputDebugStringW(input.c_str());
 		std::wstring searchword = extractCrumbValue(input);
+		//notify(L"Input: " + input);
 		notify(L"search term: " + searchword);
 		if (IsSearchQueryString(input)) {
 			SearchDirectoryValueManager::GetInstance().SetDirectory(extractLocation(input));
+		}
+		else {
+			g_cntLocationModify++;
 		}
 	
 		if (searchword.length() > 0){
@@ -794,6 +809,11 @@ void AddEntries(PVOID startEntry) {
 	// Total size before alignment
 	PFILE_ID_BOTH_DIR_INFORMATION tempEntry = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
 
+	//if (((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileName != L"." || ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileName != L"..") {
+	//	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength = 2;
+	//	wcscpy_s(((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileName, 2, L"."); // Copy string
+	//}
+
 	((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = ALIGN_UP_BY(FixedSize + ((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileNameLength, sizeof(LONGLONG));
 	
 	int tempnt = 0;
@@ -983,11 +1003,11 @@ void NavigateToFolder(const std::wstring& folderPath)
 								hr = pBrowser->Navigate2(&vtFolder, &vtEmpty, &vtEmpty, &vtEmpty, &vtEmpty);
 								if (SUCCEEDED(hr))
 								{
-									DebugLog("Successfully navigated to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
+									//DebugLog("Successfully navigated to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
 								}
 								else
 								{
-									DebugLog("Failed to navigate to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
+									//DebugLog("Failed to navigate to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
 								}
 
 								VariantClear(&vtFolder);
@@ -1032,6 +1052,145 @@ std::wstring toLower(const std::wstring& input) {
 	return result;
 }
 
+std::wstring getBasicLocationFromWndCaption(const std::wstring& input) {
+	// Define regex patterns for different cases
+	std::wregex driveRootPattern(LR"(.*\((.)\):)"), folderPattern(LR"((.*) - File Explorer)"), tabPattern(LR"(.*\((.)\): and \d+ more tab[s]? - File Explorer)");
+
+	std::wsmatch match;
+
+	// Case 1: Drive root folder string with tabs
+	if (std::regex_match(input, match, tabPattern)) {
+		return match[1].str() + L":"; // Extract drive letter and append ':'
+	}
+
+	// Case 2: Drive root folder string
+	if (std::regex_match(input, match, driveRootPattern)) {
+		return match[1].str() + L":"; // Extract drive letter and append ':'
+	}
+
+	// Case 3: Normal folder string or tabs opened
+	if (std::regex_match(input, match, folderPattern)) {
+		std::wstring folderName = match[1].str();
+		std::size_t tabPos = folderName.find(L" and ");
+		if (tabPos != std::wstring::npos) {
+			folderName = folderName.substr(0, tabPos); // Remove " and n more tabs"
+		}
+		return folderName;
+	}
+
+	// Default case: Return the input as-is (if it doesn't match any pattern)
+	return input;
+}
+
+std::wstring getFinalLocation(const std::wstring& input) {
+	// Define regex pattern for drive root folder
+	std::wregex driveRootPattern(LR"(.*\(\s*(.)\s*:\))");
+
+	std::wsmatch match;
+
+	// Check if the input is a drive root folder string
+	if (std::regex_search(input, match, driveRootPattern)) {
+		return match[1].str() + L":"; // Extract drive letter and append ':'
+	}
+
+	// If not a drive root folder string, return the input as-is
+	return input;
+}
+
+std::wstring GetCurrentCaption() {
+
+	const wchar_t* targetClassName = L"CabinetWClass";
+
+	HWND hWnd = FindWindowW(targetClassName, nullptr);
+	if (!hWnd) {
+		std::cerr << "Window not found.\n";
+		return NULL;
+	}
+
+	// Get the window's title length
+	int titleLength = GetWindowTextLength(hWnd);
+	if (titleLength == 0) {
+		std::cerr << "Window title is empty or failed to retrieve.\n";
+		return NULL;
+	}
+
+	// Retrieve the window's title text
+	std::wstring title(titleLength, L'\0');
+	GetWindowTextW(hWnd, &title[0], titleLength + 1);
+	return title;
+}
+
+std::wstring GetCurrentFolderName(const std::wstring& input) {
+	size_t lastBackslash = input.rfind(L'\\');
+
+	if (lastBackslash == std::wstring::npos) {
+		// No backslash found, return the original string
+		return input;
+	}
+
+	if (lastBackslash == input.length() - 1) {
+		// Backslash is at the end, remove it
+		return input.substr(0, lastBackslash);
+	}
+
+	// Return the substring after the last backslash
+	return input.substr(lastBackslash + 1);
+}
+
+
+bool hasTwoOccurrences(const std::wstring& str) {
+	std::wstring target = L" - ";
+	size_t count = 0;
+	size_t pos = str.find(target);
+
+	while (pos != std::wstring::npos) {
+		count++;
+		pos = str.find(target, pos + target.length());
+	}
+
+	return count == 2; // Check if there are exactly 2 occurrences
+}
+
+bool hasOneOccurrence(const std::wstring& str) {
+	std::wstring target = L" - ";
+	size_t count = 0;
+	size_t pos = str.find(target);
+
+	while (pos != std::wstring::npos) {
+		count++;
+		pos = str.find(target, pos + target.length());
+	}
+
+	return count == 1; // Check if there is exactly 1 occurrence
+}
+
+void AddEmptryFolderEntries(PVOID startEntry) {
+	const ULONG FixedSize = offsetof(FILE_ID_BOTH_DIR_INFORMATION, FileName);
+	if (((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileName == L".") {
+		PVOID nextOne;
+		nextOne = (BYTE*)startEntry + getNextEntryOffset(startEntry, FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation);
+		((PFILE_ID_BOTH_DIR_INFORMATION)nextOne)->NextEntryOffset = NO_MORE_ENTRIES;
+		//return;
+	}
+	else if (((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->FileName == L"..") {
+		((PFILE_ID_BOTH_DIR_INFORMATION)startEntry)->NextEntryOffset = NO_MORE_ENTRIES;
+		//return;
+	}
+	else {
+		PFILE_ID_BOTH_DIR_INFORMATION tempEntry1 = (PFILE_ID_BOTH_DIR_INFORMATION)startEntry;
+		tempEntry1->FileNameLength = 2;
+		wcscpy_s(tempEntry1->FileName, 2, L".");
+		tempEntry1->NextEntryOffset = ALIGN_UP_BY(104 + 2, sizeof(LONGLONG));
+		tempEntry1->FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+
+		PFILE_ID_BOTH_DIR_INFORMATION tempEntry2 = (PFILE_ID_BOTH_DIR_INFORMATION)((BYTE*)tempEntry1 + tempEntry1->NextEntryOffset);
+		tempEntry2->FileNameLength = 4;
+		wcscpy_s(tempEntry2->FileName, 4, L"..");
+		tempEntry2->NextEntryOffset = NO_MORE_ENTRIES;
+		tempEntry2->FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+	}
+}
+
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	HANDLE FileHandle,
@@ -1049,6 +1208,9 @@ typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 
 NtQueryDirectoryFile_t Real_NtQueryDirectoryFile = nullptr;
 
+static int queryCnt = 0;
+std::wstring prevQueryPath;
+
 NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 	HANDLE FileHandle,
 	HANDLE Event,
@@ -1065,7 +1227,7 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 	PVOID	currFile;
 	
 	NTSTATUS status = Real_NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, FileInformation, Length, FileInformationClass, ReturnSingleEntry, FileName, RestartScan);
-
+	
 	if (NT_SUCCESS(status)) {
 		// Query the file path associated with the FileHandle
 		std::wstring filePath = GetFilePathFromHandle(FileHandle);
@@ -1084,11 +1246,34 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
 		}
 
+		
+		//OutputDebugStringA("-------------Caption String:");
+		std::wstring captionStr =  GetCurrentCaption();		
+		//OutputDebugStringW(captionStr.c_str());
+		//OutputDebugStringA("Input String:");
+		//OutputDebugStringW(g_InputStr.c_str());
+		////OutputDebugStringW(GetCurrentFolderName(normalizedPath).c_str());
+		//OutputDebugStringA("Search location:");
+		////OutputDebugStringW(lastSearchLocation.c_str());
+		//OutputDebugStringA("Normalized path:");
+		//OutputDebugStringW(normalizedPath.c_str());
+		static bool flag = false;
+		if (!flag) {
+			flag = true;
+			prevQueryPath = normalizedPath;
+		}
 		if (FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
+			//OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
+			//OutputDebugStringW((L"Search Path: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+			if (normalizedPath.find(L"Windows\\WinSxS") != std::wstring::npos) {
+				AddEmptryFolderEntries(FileInformation);
+				return status;
+			}
 
-			if (SearchDirectoryValueManager::GetInstance().GetDirectory() != L"") {
-
+			if (SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath) { // serach is in progress				
+				//OutputDebugStringA("Search is in progress");
 				std::wstring drivePath = GetDrivePath(normalizedPath);
+				//OutputDebugStringW((L"Drive path: " + drivePath).c_str());
 
 				if (normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") != std::wstring::npos)
 					return status;
@@ -1102,17 +1287,66 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 						AddEntries(currFile);
 					}
 				}
+				SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 			}
+
+			//if (normalizedPath != prevQueryPath) {
+			//	SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+			//}
+
+			std::wstring lastSearchLocation = SearchDirectoryValueManager::GetInstance().GetDirectory();
+			if (lastSearchLocation != L"" && normalizedPath.find(lastSearchLocation) == std::wstring::npos && IsSearchQueryString(g_InputStr)) {
+				if (normalizedPath.find(prevQueryPath) != std::wstring::npos) {
+					AddEmptryFolderEntries(FileInformation);
+					//OutputDebugStringW((L"Caption: " + captionStr).c_str());
+					//OutputDebugStringA("added emptry entries");
+					return status;
+				}
+			}
+
+			
+
+			/*if (SearchDirectoryValueManager::GetInstance().GetDirectory() != L"" && hasOneOccurrence(captionStr) && !IsSearchQueryString(g_InputStr)) {
+				OutputDebugStringW((L"RRInput: " + g_InputStr).c_str());
+				OutputDebugStringW((L"RRSearch location: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+				NavigateToFolder(L"E:\\");
+				
+				SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+				OutputDebugStringW((L"after set: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+			}*/
+			//if(SearchDirectoryValueManager::GetInstance().GetDirectory() != L"") OutputDebugStringW((L"Search location2: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+			//if (captionStr.find(L"Search Results in") == std::wstring::npos) {
+			//	if (flag) {
+			//		OutputDebugStringA("Input String:");
+			//		OutputDebugStringW(g_InputStr.c_str());
+
+			//		OutputDebugStringW((L"search location: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+			//		//if (!IsSearchQueryString(g_InputStr)) {
+			//		std::wstring locationFromCaption = getFinalLocation(getBasicLocationFromWndCaption(captionStr));
+			//		if (endsWithColon(locationFromCaption)) {
+			//			NavigateToFolder(locationFromCaption);
+			//			flag = false;
+			//		}
+			//		//	SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+			//		//}
+			//	}
+			//}
 		}
 		else if (FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
-			if(normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") == std::wstring::npos)
-				NavigateToFolder(normalizedPath);
+			g_cntLocationModify = 0;
+			//OutputDebugStringW((L"Fully queried path: " + normalizedPath).c_str());
+			static int tempcnt = 1;
+			tempcnt++;
+			if (normalizedPath == L"\\") tempcnt = 0;
+			if (normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") == std::wstring::npos) {
+				if (tempcnt > 1 && captionStr.find(L"Search Result")==std::wstring::npos) NavigateToFolder(normalizedPath);
+			}
 			SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 		}
+		prevQueryPath = normalizedPath;
+		
 	}
-
 	return status;
 }
-
 
 #endif
