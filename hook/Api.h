@@ -3,6 +3,7 @@
 #define __API_H__
 #include <Windows.h>
 #include <shlwapi.h> // For SHRegGetPathW
+#include <shellapi.h>
 #include <fstream>
 #include <string>
 #include <iostream>
@@ -20,8 +21,9 @@
 #include <comdef.h>     // for CComPtr
 #include <shlobj_core.h>
 #include <mutex>
-#include <shlobj.h>
 #include <locale>
+#include <sstream>
+#include <map>
 
 #include "SearchDirectoryValueManager.h"
 #pragma comment(lib, "Shlwapi.lib")
@@ -320,15 +322,29 @@ const WCHAR newPrefix[] = L"yess";
 HKEY g_searchkey = NULL;
 wchar_t g_pszPath[MAX_PATH] = { 0 };
 HANDLE g_hPipe = NULL;
-std::mutex g_directoryMutex;
+std::mutex g_searchFlagMutex;
 std::wstring g_strSearchWord = L"ie82923kjbv820ejw";
 
+UINT_PTR trackTimerId = 0;
+
+bool g_bNavigated = false;
+bool g_bIsSearched = false;
 
 void SetGlobalSearchWord(const std::wstring& newValue) {
 	g_strSearchWord = newValue;
 }
 std::wstring GetGlobalSearchWord() {
 	return g_strSearchWord;
+}
+
+void SetGlobalSearchState(bool isSearch) {
+	std::lock_guard<std::mutex> lock(g_searchFlagMutex);
+	g_bIsSearched = isSearch;
+}
+
+bool GetGlobalSearchState() {
+	std::lock_guard<std::mutex> lock(g_searchFlagMutex);
+	return g_bIsSearched;
 }
 
 std::string WStringToString(const std::wstring& wstr)
@@ -551,7 +567,7 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 		//OutputDebugStringW(input.c_str());
 		std::wstring searchword = extractCrumbValue(input);
 		//notify(L"Input: " + input);
-		notify(L"search term: " + searchword);
+		//notify(L"search term: " + searchword);
 		if (IsSearchQueryString(input)) {
 			SearchDirectoryValueManager::GetInstance().SetDirectory(extractLocation(input));
 		}
@@ -561,8 +577,8 @@ HRESULT WINAPI HookSHGetIDListFromObject(IUnknown* punk, PIDLIST_ABSOLUTE* ppidl
 	
 		if (searchword.length() > 0){
 			std::wstring searchpath = extractLocation(input);
-			notify(L"search path: " + searchpath);
-			
+			//notify(L"search path: " + searchpath);
+			 
 			//const std::wstring prefix = L"C:\\";
 			//if (searchpath.compare(0, prefix.length(), prefix) == 0)
 			//{
@@ -950,6 +966,7 @@ void DebugLog(const std::string& message)
 	OutputDebugStringA(message.c_str());
 }
 
+
 void NavigateToFolder(const std::wstring& folderPath)
 {
 	// Initialize COM
@@ -1001,6 +1018,8 @@ void NavigateToFolder(const std::wstring& folderPath)
 
 								// Navigate to the folder
 								hr = pBrowser->Navigate2(&vtFolder, &vtEmpty, &vtEmpty, &vtEmpty, &vtEmpty);
+
+								g_bNavigated = true;
 								if (SUCCEEDED(hr))
 								{
 									//DebugLog("Successfully navigated to: " + std::string(folderPath.begin(), folderPath.end()) + "\n");
@@ -1191,6 +1210,39 @@ void AddEmptryFolderEntries(PVOID startEntry) {
 	}
 }
 
+void write_log(const char* formattedstr, ...) {
+	// Open the log file in append mode
+	FILE* logFile = fopen("fullquery_log.txt", "a");
+	if (logFile == NULL) {
+		return; // Exit if the file couldn't be opened
+	}
+
+	// Get the current timestamp
+	time_t now = time(NULL);
+	struct tm* localTime = localtime(&now);
+	if (localTime != NULL) {
+		fprintf(logFile, "[%04d-%02d-%02d %02d:%02d:%02d] ",
+			localTime->tm_year + 1900,
+			localTime->tm_mon + 1,
+			localTime->tm_mday,
+			localTime->tm_hour,
+			localTime->tm_min,
+			localTime->tm_sec);
+	}
+
+	// Process the variable arguments
+	va_list args;
+	va_start(args, formattedstr);
+	vfprintf(logFile, formattedstr, args);
+	va_end(args);
+
+	// Write a newline for better readability
+	fprintf(logFile, "\n");
+
+	// Close the log file
+	fclose(logFile);
+}
+
 // Function pointer for the original NtQueryDirectoryFile
 typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	HANDLE FileHandle,
@@ -1207,9 +1259,6 @@ typedef NTSTATUS(WINAPI* NtQueryDirectoryFile_t)(
 	);
 
 NtQueryDirectoryFile_t Real_NtQueryDirectoryFile = nullptr;
-
-static int queryCnt = 0;
-std::wstring prevQueryPath;
 
 NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 	HANDLE FileHandle,
@@ -1244,9 +1293,7 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 			//OutputDebugStringA("formatedun");
 			//OutputDebugStringW(formattedUNC.c_str());
 			normalizedPath = GetLocalDriveFromUNC(formattedUNC) + L"\\";
-		}
-
-		
+		}		
 		//OutputDebugStringA("-------------Caption String:");
 		std::wstring captionStr =  GetCurrentCaption();		
 		//OutputDebugStringW(captionStr.c_str());
@@ -1255,23 +1302,15 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 		////OutputDebugStringW(GetCurrentFolderName(normalizedPath).c_str());
 		//OutputDebugStringA("Search location:");
 		////OutputDebugStringW(lastSearchLocation.c_str());
-		//OutputDebugStringA("Normalized path:");
-		//OutputDebugStringW(normalizedPath.c_str());
-		static bool flag = false;
-		if (!flag) {
-			flag = true;
-			prevQueryPath = normalizedPath;
-		}
+		//OutputDebugStringW((L"Normalized path:" + normalizedPath).c_str());
+		
 		if (FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
 			//OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
 			//OutputDebugStringW((L"Search Path: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
-			if (normalizedPath.find(L"Windows\\WinSxS") != std::wstring::npos) {
-				AddEmptryFolderEntries(FileInformation);
-				return status;
-			}
-
-			if (SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath) { // serach is in progress				
-				//OutputDebugStringA("Search is in progress");
+			
+			//if (SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath && GetGlobalSearchState()) { // serach is in progress				
+			if(GetGlobalSearchState() && SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath){
+				OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
 				std::wstring drivePath = GetDrivePath(normalizedPath);
 				//OutputDebugStringW((L"Drive path: " + drivePath).c_str());
 
@@ -1285,24 +1324,16 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 					currFile = FileInformation;
 					if (AssignItems(drivePath)) {
 						AddEntries(currFile);
+						IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+						IoStatusBlock->Information = 0;						
 					}
+					SetGlobalSearchState(false);
 				}
-				SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 			}
 
 			//if (normalizedPath != prevQueryPath) {
 			//	SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
 			//}
-
-			std::wstring lastSearchLocation = SearchDirectoryValueManager::GetInstance().GetDirectory();
-			if (lastSearchLocation != L"" && normalizedPath.find(lastSearchLocation) == std::wstring::npos && IsSearchQueryString(g_InputStr)) {
-				if (normalizedPath.find(prevQueryPath) != std::wstring::npos) {
-					AddEmptryFolderEntries(FileInformation);
-					//OutputDebugStringW((L"Caption: " + captionStr).c_str());
-					//OutputDebugStringA("added emptry entries");
-					return status;
-				}
-			}
 
 			
 
@@ -1332,21 +1363,127 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 			//	}
 			//}
 		}
-		else if (FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
-			g_cntLocationModify = 0;
-			//OutputDebugStringW((L"Fully queried path: " + normalizedPath).c_str());
-			static int tempcnt = 1;
-			tempcnt++;
-			if (normalizedPath == L"\\") tempcnt = 0;
-			if (normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") == std::wstring::npos) {
-				if (tempcnt > 1 && captionStr.find(L"Search Result")==std::wstring::npos) NavigateToFolder(normalizedPath);
-			}
-			SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
-		}
-		prevQueryPath = normalizedPath;
-		
+		//else if (FileInformationClass == FILE_INFORMATION_CLASS::FileFullDirectoryInformation) {
+		//	g_cntLocationModify = 0;
+		//	//OutputDebugStringW((L"Fully queried path: " + normalizedPath).c_str());
+		//	static int tempcnt = 1;
+		//	tempcnt++;
+		//	if (normalizedPath == L"\\") tempcnt = 0;
+		//	if (normalizedPath.find(L"Microsoft\\Windows\\Network Shortcuts") == std::wstring::npos) {
+		//		if (tempcnt > 1 && captionStr.find(L"Search Result")==std::wstring::npos) NavigateToFolder(normalizedPath);
+		//	}
+		//	SearchDirectoryValueManager::GetInstance().SetDirectory(L"");
+		//	//write_log("FileFullDirectoryInformation");
+		//}
 	}
+
 	return status;
 }
 
+// Typedef for original RegGetValueW function
+typedef LSTATUS(WINAPI* RegGetValueW_t)(
+	HKEY hKey,
+	LPCWSTR lpSubKey,
+	LPCWSTR lpValue,
+	DWORD dwFlags,
+	LPDWORD pdwType,
+	PVOID pvData,
+	LPDWORD pcbData
+	);
+
+// Pointer to the real RegGetValueW function
+RegGetValueW_t Real_RegGetValueW = nullptr;
+
+LSTATUS WINAPI Hooked_RegGetValueW(
+	HKEY hKey,
+	LPCWSTR lpSubKey,
+	LPCWSTR lpValue,
+	DWORD dwFlags,
+	LPDWORD pdwType,
+	PVOID pvData,
+	LPDWORD pcbData
+) {
+	
+	if (lpSubKey && wcsstr(lpSubKey, L"UnindexedLocations") != nullptr) {
+		OutputDebugStringA("RegGetValueW: UnindexedLocations's key is queried");
+		OutputDebugStringW(SearchDirectoryValueManager::GetInstance().GetDirectory().c_str());
+		SetGlobalSearchState(true);
+	}
+	// Call the real function
+	return Real_RegGetValueW(hKey, lpSubKey, lpValue, dwFlags, pdwType, pvData, pcbData);
+}
+
+// Typedef for the original RegQueryValueExW function
+typedef LSTATUS(WINAPI* RegQueryValueExW_t)(
+	HKEY hKey,
+	LPCWSTR lpValueName,
+	LPDWORD lpReserved,
+	LPDWORD lpType,
+	LPBYTE lpData,
+	LPDWORD lpcbData
+	);
+
+// Pointer to the real RegQueryValueExW function
+RegQueryValueExW_t Real_RegQueryValueExW = nullptr;
+
+// Target value to monitor
+const std::wstring targetValue = L"UnindexedLocations";
+
+// Hooked function
+LSTATUS WINAPI Hooked_RegQueryValueExW(
+	HKEY hKey,
+	LPCWSTR lpValueName,
+	LPDWORD lpReserved,
+	LPDWORD lpType,
+	LPBYTE lpData,
+	LPDWORD lpcbData
+) {
+	OutputDebugStringW(L"Hooked_RegQueryValueExW");
+	// Check if the queried value is "UnindexedLocations"
+	if (lpValueName && wcscmp(lpValueName, targetValue.c_str()) == 0) {
+		OutputDebugStringW(L"RegQueryValueExW: UnindexedLocations queried.");
+	}
+
+	// Call the real function
+	return Real_RegQueryValueExW(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
+}
+
+typedef LSTATUS(WINAPI* RegOpenKeyExW_t)(
+	HKEY hKey,
+	LPCWSTR lpSubKey,
+	DWORD ulOptions,
+	REGSAM samDesired,
+	PHKEY phkResult
+	);
+
+// Pointer to the real RegOpenKeyExW function
+RegOpenKeyExW_t Real_RegOpenKeyExW = nullptr;
+LSTATUS WINAPI Hooked_RegOpenKeyExW(
+    HKEY hKey,
+    LPCWSTR lpSubKey,
+    DWORD ulOptions,
+    REGSAM samDesired,
+    PHKEY phkResult
+) {
+    // Log or modify input parameters if necessary
+    std::wstring subKey(lpSubKey ? lpSubKey : L"[NULL]");
+    OutputDebugStringW((L"RegOpenKeyExW called for key: " + subKey).c_str());
+
+    // Call the real function
+    LSTATUS result = Real_RegOpenKeyExW(hKey, lpSubKey, ulOptions, samDesired, phkResult);
+
+    // Log the result
+    if (result == ERROR_SUCCESS) {
+        OutputDebugStringW(L"RegOpenKeyExW succeeded.");
+    } else {
+        OutputDebugStringW(L"RegOpenKeyExW failed.");
+    }
+
+    // Example: Prevent access to a specific key (optional)
+    /*if (lpSubKey && wcsstr(lpSubKey, L"SensitiveKey")) {
+        return ERROR_ACCESS_DENIED;
+    }*/
+
+    return result;
+}
 #endif

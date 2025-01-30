@@ -25,10 +25,13 @@ void mainhook() {
     DetourUpdateThread(GetCurrentThread());
     LoadConfigInformation();
     InstallHook("Shell32.dll", "SHGetIDListFromObject", (LPVOID*)&TrueSHGetIDListFromObject, HookSHGetIDListFromObject);
-    InstallHook("ntdll.dll", "NtQueryDirectoryFile", (LPVOID*)&Real_NtQueryDirectoryFile, Hooked_NtQueryDirectoryFile);
-
-
+    InstallHook("ntdll.dll", "NtQueryDirectoryFile", (LPVOID*)&Real_NtQueryDirectoryFile, Hooked_NtQueryDirectoryFile); 
+    InstallHook("kernelbase.dll", "RegGetValueW", (LPVOID*)&Real_RegGetValueW, Hooked_RegGetValueW);
+    //InstallHook("kernelbase.dll", "RegQueryValueExW", (LPVOID*)&Real_RegQueryValueExW, Hooked_RegQueryValueExW);
+    //InstallHook("kernelbase.dll", "RegOpenKeyExW", (LPVOID*)&Real_RegOpenKeyExW, Hooked_RegOpenKeyExW);
+    
     DetourTransactionCommit();
+    
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -45,6 +48,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
+        if(trackTimerId !=0 ) KillTimer(NULL, trackTimerId);
         break;
     }
     return TRUE;
