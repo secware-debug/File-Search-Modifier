@@ -1305,12 +1305,12 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 		//OutputDebugStringW((L"Normalized path:" + normalizedPath).c_str());
 		
 		if (FileInformationClass == FILE_INFORMATION_CLASS::FileIdBothDirectoryInformation) {
-			//OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
-			//OutputDebugStringW((L"Search Path: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
+			OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
+			OutputDebugStringW((L"Search Path: " + SearchDirectoryValueManager::GetInstance().GetDirectory()).c_str());
 			
 			//if (SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath && GetGlobalSearchState()) { // serach is in progress				
 			if(GetGlobalSearchState() && SearchDirectoryValueManager::GetInstance().GetDirectory() == normalizedPath){
-				OutputDebugStringW((L"Normalized path: " + normalizedPath).c_str());
+				OutputDebugStringW(L"Searching");
 				std::wstring drivePath = GetDrivePath(normalizedPath);
 				//OutputDebugStringW((L"Drive path: " + drivePath).c_str());
 
@@ -1327,8 +1327,11 @@ NTSTATUS WINAPI Hooked_NtQueryDirectoryFile(
 						IoStatusBlock->Status = STATUS_NO_MORE_FILES;
 						IoStatusBlock->Information = 0;						
 					}
-					SetGlobalSearchState(false);
 				}
+			}
+
+			if (captionStr.find(L"Search Results in") != std::wstring::npos) {
+				SetGlobalSearchState(false);
 			}
 
 			//if (normalizedPath != prevQueryPath) {
@@ -1406,7 +1409,7 @@ LSTATUS WINAPI Hooked_RegGetValueW(
 	
 	if (lpSubKey && wcsstr(lpSubKey, L"UnindexedLocations") != nullptr) {
 		OutputDebugStringA("RegGetValueW: UnindexedLocations's key is queried");
-		OutputDebugStringW(SearchDirectoryValueManager::GetInstance().GetDirectory().c_str());
+		// OutputDebugStringW(SearchDirectoryValueManager::GetInstance().GetDirectory().c_str());
 		SetGlobalSearchState(true);
 	}
 	// Call the real function
