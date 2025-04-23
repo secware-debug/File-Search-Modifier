@@ -1,0 +1,52 @@
+{
+   "ResultSet": [
+      {
+         "Location": "D:\\folder1\\file1.txt",
+         "Type": "File"
+      },
+      {
+         "Location": "D:\\folder1",
+         "Type": "Folder"
+      },
+      {
+         "Location": "E:\\folder2",
+         "Type": "Folder"
+      },
+      {
+         "Location": "E:\\folder3",
+         "Type": "Folder"
+      },
+      {
+         "Location": "F:\\folder4",
+         "Type": "Folder"
+      },
+      {
+         "Location": "D:\\folder5",
+         "Type": "Folder"
+      },
+      {
+         "Location": "F:\\folder4\\testfile4.txt",
+         "Type": "File"
+      },
+      {
+         "Location": "D:\\folder1\\file2.txt",
+         "Type": "File"
+      },
+      {
+         "Location": "D:\\folder1\\file3.txt",
+         "Type": "File"
+      },
+      {
+         "Location": "E:\\folder3\\confirmfile1.txt",
+         "Type": "File"
+      },
+      {
+         "Location": "E:\\folder2\\confirmfile2.dat",
+         "Type": "File"
+      },
+      {
+         "Location": "D:\\folder5\\testexe.exe",
+         "Type": "File"
+      }
+   ]
+}
